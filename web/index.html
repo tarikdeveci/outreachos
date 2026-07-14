@@ -109,8 +109,30 @@
   .dlg[open]{animation:pop .2s var(--ease)}
   @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
 
+  /* daily assistant */
+  .today{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(280px,.8fr);gap:14px;margin-bottom:18px}
+  .today-main{padding:28px;background:linear-gradient(135deg,var(--surface),oklch(0.23 .025 154));border:1px solid var(--signal-dim);border-radius:18px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--signal);margin-bottom:10px}
+  .today h1{font-size:clamp(25px,3vw,38px);line-height:1.08;letter-spacing:-.035em;margin:0 0 10px;max-width:700px}
+  .today-lead{color:var(--muted);font-size:14px;line-height:1.55;max-width:640px;margin:0 0 22px}
+  .primary-actions{display:flex;gap:9px;flex-wrap:wrap}
+  .today-side{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:20px}
+  .focus-list{display:flex;flex-direction:column;gap:8px}
+  .focus-item{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;background:var(--surface-2);border:1px solid var(--line-soft);border-radius:10px;cursor:pointer}
+  .focus-item:hover{border-color:var(--signal-dim)}
+  .focus-item span{font-size:13px}.focus-item b{font-family:var(--mono);font-size:16px;color:var(--signal)}
+  .guide{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px}
+  .guide-step{padding:15px;background:var(--surface);border:1px solid var(--line);border-radius:12px;color:var(--muted);font-size:12.5px;line-height:1.45}
+  .guide-step b{display:block;color:var(--ink);font-size:13px;margin-bottom:4px}
+  .guide-step .num{font-family:var(--mono);color:var(--signal);margin-right:6px}
+  .analytics{border-top:1px solid var(--line-soft);padding-top:14px}
+  .analytics summary{cursor:pointer;color:var(--faint);font-size:12px;margin-bottom:14px;user-select:none}
+  .section-head{display:flex;justify-content:space-between;align-items:end;gap:16px;margin-bottom:16px}
+  .section-head h2{font-size:24px;letter-spacing:-.025em;margin:0}.section-head p{margin:5px 0 0;color:var(--faint);font-size:13px}
+
   @media (max-width:760px){
     .two,.setgrid{grid-template-columns:1fr}
+    .today{grid-template-columns:1fr}.guide{grid-template-columns:1fr}.today-main{padding:22px}
     .topbar{height:auto;padding:10px 0}.sub{display:none}
   }
 </style>
@@ -119,9 +141,9 @@
 <header class="topbar"><div class="app" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;width:100%">
   <span class="mark"><span class="dot"></span>outreach<b>·os</b></span>
   <nav class="nav">
-    <button class="tabbtn on" data-tab="overview">Genel Bakış</button>
-    <button class="tabbtn" data-tab="kanban">Kanban</button>
-    <button class="tabbtn" data-tab="table">Tablo</button>
+    <button class="tabbtn on" data-tab="overview">Bugün</button>
+    <button class="tabbtn" data-tab="kanban">Başvuru akışı</button>
+    <button class="tabbtn" data-tab="table">Şirketler</button>
     <button class="tabbtn" data-tab="personal">Kişisel</button>
     <button class="tabbtn" data-tab="settings">Ayarlar</button>
   </nav>
@@ -131,6 +153,29 @@
 <main class="app">
   <!-- OVERVIEW -->
   <section id="overview" class="tab show">
+    <div class="today">
+      <div class="today-main">
+        <div class="eyebrow">Bugünün çalışma alanı</div>
+        <h1>Bir sonraki doğru adımı seç, gerisini panel takip etsin.</h1>
+        <p class="today-lead" id="todayLead">Şirketlerini kontrol ediyoruz…</p>
+        <div class="primary-actions">
+          <button class="btn" onclick="openAdd()">+ Yeni şirket ekle</button>
+          <button class="btn btn-sub" onclick="openFocus('ARASTIRILMADI')">İncelenecekleri aç</button>
+          <button class="btn btn-ghost" onclick="openFocus('TASLAK')">Hazır mesajlar</button>
+        </div>
+      </div>
+      <aside class="today-side">
+        <p class="ph">Şimdi ne yapabilirsin?</p>
+        <div class="focus-list" id="focusList"></div>
+      </aside>
+    </div>
+    <div class="guide">
+      <div class="guide-step"><b><span class="num">1</span>Şirket seç</b>İlgini çeken bir şirket ekle veya inceleneceklerden birini aç.</div>
+      <div class="guide-step"><b><span class="num">2</span>İletişim yolunu bul</b>Doğrulanmış e-posta ya da gerçek başvuru bağlantısını kaydet.</div>
+      <div class="guide-step"><b><span class="num">3</span>Mesajı hazırla</b>Taslağı gözden geçir, başvur ve sonucu panelde güncelle.</div>
+    </div>
+    <details class="analytics">
+      <summary>İstatistikleri ve günlük limitleri göster</summary>
     <div class="kpis">
       <div class="kpi"><div class="n mono" id="kpiTotal">–</div><div class="l">Toplam şirket</div></div>
       <div class="kpi sig"><div class="n mono" id="kpiToday">–</div><div class="l">Bugün yeni temas</div></div>
@@ -150,16 +195,19 @@
         <canvas id="chDaily" height="150"></canvas>
       </div>
     </div>
+    </details>
   </section>
 
   <!-- KANBAN -->
   <section id="kanban" class="tab">
+    <div class="section-head"><div><h2>Başvuru akışı</h2><p>Şirketleri hangi aşamada olduklarına göre ilerlet.</p></div><button class="btn btn-sm" onclick="openAdd()">+ Şirket ekle</button></div>
     <div class="board" id="board"></div>
     <p class="sub" style="margin-top:8px">Kartı sürükleyip başka kolona bırakarak durumu değiştir. Elenenler Tablo sekmesinde.</p>
   </section>
 
   <!-- TABLE -->
   <section id="table" class="tab">
+    <div class="section-head"><div><h2>Tüm şirketler</h2><p>Arama, filtreleme ve ayrıntılı düzenleme için.</p></div></div>
     <div class="filters">
       <input id="fq" class="field grow" placeholder="Ara: firma / sektör / not…">
       <select id="fdurum" class="field"></select>
@@ -237,9 +285,16 @@
 const $=s=>document.querySelector(s);
 const api=(p,o)=>fetch('/api'+p,o).then(r=>r.json());
 let META={statuses:[],kanban_columns:[]}, CO=[], charts={}, SESSION={};
+const STATUS_LABELS={
+  ARASTIRILMADI:'Araştırılacak',TASLAK:'Mesaj hazır',ATS_DIGEST:'Başvuru bağlantısı bulundu',
+  FORM_DOLDURULDU:'Başvuru yapıldı',ADAY:'Görüşme sürecinde',BEKLIYOR:'Yanıt bekleniyor',
+  ELENEN_KISISEL:'Kişisel / otomasyon dışı',ELENEN_EPOSTA_BULUNAMADI:'İletişim bilgisi bulunamadı',
+  ELENEN_ZERO_TOLERANCE:'Role uygun değil',ELENEN_SEKTOR:'Sektöre uygun değil'
+};
+const statusLabel=s=>STATUS_LABELS[s]||(String(s).startsWith('ELENEN')?'Uygun değil':String(s).replaceAll('_',' ').toLocaleLowerCase('tr-TR'));
 const STC={TASLAK:'#e2a03e',ATS_DIGEST:'#46adba',ADAY:'#ee6a4d',FORM_DOLDURULDU:'#b487e6',BEKLIYOR:'#d9c257',ARASTIRILMADI:'#9c968f'};
 const stColor=d=>STC[d]|| (String(d).startsWith('ELENEN')?'#8f7a68':'#9c968f');
-const badge=d=>`<span class="badge" data-st="${esc(d)}">${esc(d)}</span>`;
+const badge=d=>`<span class="badge" data-st="${esc(d)}">${esc(statusLabel(d))}</span>`;
 const esc=s=>String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 const debounce=(fn,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}};
 
@@ -260,7 +315,7 @@ async function boot(){
   SESSION=await api('/session');
   if(!SESSION.authed){location.href='/login';return;}
   META=await api('/meta');
-  const fd=$('#fdurum');fd.innerHTML='<option value="">Tüm durumlar</option>'+META.statuses.map(s=>`<option>${s}</option>`).join('');
+  const fd=$('#fdurum');fd.innerHTML='<option value="">Tüm durumlar</option>'+META.statuses.map(s=>`<option value="${esc(s)}">${esc(statusLabel(s))}</option>`).join('');
   ['fq','fsektor','fproje'].forEach(id=>$('#'+id).oninput=debounce(renderTable,250));
   fd.onchange=renderTable;
   await loadCompanies(); await overview();
@@ -279,12 +334,28 @@ async function overview(){
   $('#capsToggle').onchange=e=>api('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({daily_caps_enabled:e.target.checked})});
   const capTxt=cap>=999?'sınırsız':cap;
   $('#capsBox').innerHTML=`Bugün taslak: <b>${s.today_drafts}</b> · limit: <b style="color:var(--muted)">${capTxt}</b>`;
-  drawStatus(s.by_status);drawDaily(s.daily);
+  renderFocus(s);drawStatus(s.by_status);drawDaily(s.daily);
+}
+function renderFocus(s){
+  const count=st=>CO.filter(c=>c.durum===st&&!c.is_elenen).length;
+  const research=count('ARASTIRILMADI'),drafts=count('TASLAK');
+  const waiting=count('BEKLIYOR')+count('FORM_DOLDURULDU')+count('ATS_DIGEST');
+  $('#todayLead').textContent=research
+    ? `${research} şirket araştırılmayı bekliyor. Önce birini açıp iletişim yolunu netleştir.`
+    : drafts ? `${drafts} hazır mesajın var. Göndermeden önce son kez kontrol et.`
+    : 'Bugünkü liste temiz görünüyor. Yeni bir hedef şirket ekleyebilirsin.';
+  const items=[['ARASTIRILMADI','İncelenecek şirket',research],['TASLAK','Hazır mesaj',drafts],['BEKLIYOR','Yanıt / sonuç bekleyen',waiting]];
+  $('#focusList').innerHTML=items.map(([st,label,n])=>`<div class="focus-item" onclick="openFocus('${st}')"><span>${label}</span><b>${n}</b></div>`).join('');
+}
+function openFocus(status){
+  tab('table');
+  $('#fdurum').value=META.statuses.includes(status)?status:'';
+  renderTable();
 }
 function drawStatus(by){
-  const labels=Object.keys(by),data=labels.map(l=>by[l]);
+  const keys=Object.keys(by),labels=keys.map(statusLabel),data=keys.map(l=>by[l]);
   charts.status?.destroy();
-  charts.status=new Chart($('#chStatus'),{type:'doughnut',data:{labels,datasets:[{data,backgroundColor:labels.map(stColor),borderColor:'#3a352f',borderWidth:2}]},
+  charts.status=new Chart($('#chStatus'),{type:'doughnut',data:{labels,datasets:[{data,backgroundColor:keys.map(stColor),borderColor:'#3a352f',borderWidth:2}]},
     options:{cutout:'62%',plugins:{legend:{position:'right',labels:{boxWidth:9,boxHeight:9,padding:8,font:{size:10}}}}}});
 }
 function drawDaily(daily){
@@ -366,7 +437,7 @@ async function openDrawer(id){
       <button class="btn btn-sub btn-sm" style="flex:1" onclick="aiMatch(${c.id})">🎯 Proje eşleştir</button></div>`}
     <div id="aiOut" class="aiout hidden"></div>
     <label class="lbl">Durum</label>
-    <select id="dDurum" class="field" style="margin-bottom:14px">${META.statuses.map(s=>`<option ${s===c.durum?'selected':''}>${s}</option>`).join('')}</select>
+    <select id="dDurum" class="field" style="margin-bottom:14px">${META.statuses.map(s=>`<option value="${esc(s)}" ${s===c.durum?'selected':''}>${esc(statusLabel(s))}</option>`).join('')}</select>
     <div class="dgrid">
       <div><div class="k">Sektör</div><div class="v">${esc(c.sektor||'-')}</div></div>
       <div><div class="k">Kanal</div><div class="v">${esc(c.kanal||'-')}</div></div>
@@ -425,7 +496,7 @@ async function saveProfile(){
 async function logout(){await api('/logout',{method:'POST'});location.href='/';}
 
 function openAdd(){
-  $('#addDurum').innerHTML=META.statuses.map(s=>`<option ${s==='ARASTIRILMADI'?'selected':''}>${s}</option>`).join('');
+  $('#addDurum').innerHTML=META.statuses.map(s=>`<option value="${esc(s)}" ${s==='ARASTIRILMADI'?'selected':''}>${esc(statusLabel(s))}</option>`).join('');
   $('#addMsg').textContent=''; $('#addForm').reset(); $('#addDurum').value='ARASTIRILMADI';
   addDlg.showModal();
 }
