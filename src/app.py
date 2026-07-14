@@ -220,6 +220,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_update_company(int(u.path.rsplit("/", 1)[1]))
         self.send_error(404)
 
+    def do_DELETE(self):
+        u = urlparse(self.path)
+        if not self._authed():
+            return self._json({"error": "unauthorized"}, 401)
+        if u.path.startswith("/api/company/"):
+            return self.api_delete_company(int(u.path.rsplit("/", 1)[1]))
+        self.send_error(404)
+
     # ---------- auth endpoints ----------
     def api_session(self):
         conn = get_conn()
@@ -375,8 +383,10 @@ class Handler(BaseHTTPRequestHandler):
         try: replies = gmail.find_replies(email, self._gmail_token(conn))
         except Exception as e: conn.close(); return self._json({"error": str(e)}, 400)
         if replies:
-            conn.execute("UPDATE companies SET last_reply_seen=?, durum='ADAY', son_guncelleme=? WHERE id=?", (now_iso(), now_iso(), cid))
-            conn.commit()
+            eski = row["durum"]
+            conn.execute("UPDATE companies SET last_reply_seen=?, durum='ADAY', durum_raw='ADAY', son_guncelleme=? WHERE id=?", (now_iso(), now_iso(), cid))
+            write_audit(conn, cid, "durum", eski, "ADAY", "gmail")
+            conn.commit(); sync_csv()
         conn.close(); self._json({"ok": True, "reply_found": bool(replies), "count": len(replies)})
 
     # ---------- AI (BYOK) ----------
@@ -454,6 +464,17 @@ class Handler(BaseHTTPRequestHandler):
         sync_csv()
         self._json(row_to_company(r), 201)
 
+    def api_delete_company(self, cid):
+        conn = get_conn()
+        r = conn.execute("SELECT firma FROM companies WHERE id=?", (cid,)).fetchone()
+        if not r:
+            conn.close(); return self.send_error(404)
+        conn.execute("DELETE FROM audit_log WHERE company_id=?", (cid,))
+        conn.execute("DELETE FROM companies WHERE id=?", (cid,))
+        conn.commit(); conn.close()
+        sync_csv()
+        self._json({"ok": True})
+
     def api_company_detail(self, cid):
         conn = get_conn()
         r = conn.execute("SELECT * FROM companies WHERE id=?", (cid,)).fetchone()
@@ -528,7 +549,7 @@ def main():
     ensure_db()
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"[app] İş Arama Dashboard  ->  http://localhost:{PORT}")
-    print(f"[app] AI (anthropic SDK): {'kurulu' if ai.available() else 'KURULU DEĞİL (pip install anthropic)'}")
+    print(f"[app] AI: hazır (model={ai.MODEL}, {'SDK' if getattr(ai, '_SDK', False) else 'raw-HTTP'}) — anahtar Ayarlar'dan bağlanır")
     print("[app] Durdurmak için Ctrl+C")
     try:
         srv.serve_forever()
