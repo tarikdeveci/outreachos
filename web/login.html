@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Giriş — OutreachOS</title>
+<link rel="stylesheet" href="/theme.css">
+<style>
+  body{min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(120% 70% at 50% -10%, oklch(0.70 0.17 30 / .09), transparent 55%),var(--bg)}
+  .box{width:100%;max-width:392px;padding:0 22px}
+  .mark{font-family:var(--mono);font-weight:600;font-size:15px;text-align:center;display:flex;gap:9px;justify-content:center;align-items:center;margin-bottom:20px}
+  .mark .dot{width:8px;height:8px;border-radius:50%;background:var(--signal);box-shadow:0 0 12px var(--signal)}
+  .mark b{color:var(--signal)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:28px;
+    box-shadow:0 20px 50px oklch(0 0 0 / .4)}
+  h1{margin:0 0 4px;font-size:19px;font-weight:600;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:13.5px;margin:0 0 20px}
+  form>*+*{margin-top:14px}
+  .btn{width:100%}
+  .err{color:var(--st-elenen);font-size:13px;min-height:18px;margin-top:12px}
+  .back{display:block;text-align:center;color:var(--faint);font-family:var(--mono);font-size:12px;margin-top:18px;text-decoration:none}
+  .back:hover{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="mark"><span class="dot"></span>outreach<b>·os</b></div>
+  <div class="card">
+    <h1 id="title">Giriş</h1>
+    <p class="sub" id="hint">Panele erişmek için parolanı gir.</p>
+    <form id="form">
+      <div><label class="lbl" id="lbl" for="pw">Parola</label>
+        <input id="pw" class="field" type="password" autocomplete="current-password" autofocus></div>
+      <div id="pw2wrap" style="display:none"><label class="lbl" for="pw2">Parola (tekrar)</label>
+        <input id="pw2" class="field" type="password" autocomplete="new-password"></div>
+      <button id="submit" class="btn" type="submit">Giriş yap</button>
+      <div class="err" id="err"></div>
+    </form>
+  </div>
+  <a class="back" href="/">← ana sayfa</a>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+let setupMode = false;
+async function init(){
+  const s = await fetch('/api/session').then(r=>r.json());
+  if(s.authed){ location.href='/app'; return; }
+  if(!s.configured){
+    setupMode = true;
+    $('#title').textContent='İlk kurulum';
+    $('#hint').textContent='Bu instance için bir yönetici parolası belirle (en az 6 karakter).';
+    $('#lbl').textContent='Yeni parola'; $('#pw').autocomplete='new-password';
+    $('#pw2wrap').style.display='block'; $('#submit').textContent='Parolayı belirle';
+  }
+}
+$('#form').onsubmit = async e => {
+  e.preventDefault(); $('#err').textContent='';
+  const pw = $('#pw').value;
+  if(setupMode){
+    if(pw.length<6){ $('#err').textContent='Parola en az 6 karakter olmalı.'; return; }
+    if(pw!==$('#pw2').value){ $('#err').textContent='Parolalar eşleşmiyor.'; return; }
+    const r = await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+    r.ok ? location.href='/app' : $('#err').textContent=(await r.json()).error||'Hata';
+  } else {
+    const r = await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+    r.ok ? location.href='/app' : $('#err').textContent='Parola hatalı.';
+  }
+};
+init();
+</script>
+</body>
+</html>

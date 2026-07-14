@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OutreachOS — İş Arama Komuta Paneli</title>
+<link rel="stylesheet" href="/theme.css">
+<style>
+  body{background:
+    radial-gradient(120% 80% at 100% -10%, oklch(0.70 0.17 30 / .09), transparent 55%),
+    radial-gradient(90% 60% at 0% 0%, oklch(0.80 0.13 75 / .05), transparent 50%),
+    var(--bg);
+    min-height:100vh}
+  .sig{color:var(--signal)}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 22px}
+  .topbar{display:flex;align-items:center;justify-content:space-between;height:66px;
+    position:sticky;top:0;z-index:var(--z-sticky);
+    background:oklch(0.185 0.008 40 / .74);backdrop-filter:blur(10px);border-bottom:1px solid var(--line-soft)}
+  .mark{font-family:var(--mono);font-weight:600;font-size:15px;letter-spacing:-.01em;display:flex;align-items:center;gap:9px}
+  .mark .dot{width:8px;height:8px;border-radius:50%;background:var(--signal);box-shadow:0 0 12px var(--signal)}
+  .mark b{color:var(--signal)}
+
+  .hero{display:grid;grid-template-columns:1.05fr .95fr;gap:48px;align-items:center;
+    padding:78px 0 64px}
+  .pill{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;
+    color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:6px 13px;margin-bottom:26px}
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:var(--signal)}
+  h1{font-size:clamp(2.1rem,4.6vw,3.4rem);line-height:1.04;font-weight:700;letter-spacing:-.025em;
+    text-wrap:balance;margin:0 0 20px}
+  h1 .g{color:var(--signal)}
+  .lede{color:var(--muted);font-size:17px;max-width:34ch;margin:0 0 30px;text-wrap:pretty}
+  .cta{display:flex;gap:12px;flex-wrap:wrap}
+  .kbd{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:22px}
+  .kbd code{background:var(--surface);border:1px solid var(--line);padding:3px 8px;border-radius:6px;color:var(--signal)}
+
+  /* live board preview — show, don't tell */
+  .preview{background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden;
+    box-shadow:0 24px 60px oklch(0 0 0 / .45)}
+  .pv-bar{display:flex;align-items:center;gap:7px;padding:12px 15px;border-bottom:1px solid var(--line-soft);background:oklch(0.19 0 0)}
+  .pv-bar .t{width:11px;height:11px;border-radius:50%;background:var(--line)}
+  .pv-bar .who{margin-left:8px;font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .pv-kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line-soft)}
+  .pv-kpi div{background:var(--surface);padding:13px 14px}
+  .pv-kpi .n{font-family:var(--mono);font-size:22px;font-weight:600}
+  .pv-kpi .n.sig{color:var(--signal)}
+  .pv-kpi .l{font-size:11px;color:var(--faint);margin-top:2px}
+  .pv-cols{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:15px}
+  .pv-col>.h{font-size:11px;color:var(--muted);margin-bottom:9px;display:flex;justify-content:space-between}
+  .pv-card{background:oklch(0.235 0 0);border:1px solid var(--line-soft);border-radius:9px;padding:9px 10px;margin-bottom:8px}
+  .pv-card .f{font-size:12.5px;font-weight:600}
+  .pv-card .s{font-size:11px;color:var(--faint);margin-top:2px}
+
+  .section{padding:26px 0 70px}
+  .eyebrow{font-family:var(--mono);font-size:12px;color:var(--signal);margin-bottom:14px}
+  .feat{display:grid;grid-template-columns:repeat(6,1fr);gap:14px}
+  .cell{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px;grid-column:span 2}
+  .cell.wide{grid-column:span 3}
+  .cell .ic{font-size:20px;margin-bottom:12px;display:block}
+  .cell h3{margin:0 0 7px;font-size:15px;font-weight:600}
+  .cell p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.5}
+
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;counter-reset:s}
+  .step{position:relative;padding-top:14px;border-top:2px solid var(--line)}
+  .step:first-child{border-top-color:var(--signal)}
+  .step .n{font-family:var(--mono);font-size:12px;color:var(--faint)}
+  .step b{display:block;margin:8px 0 4px;font-size:14px}
+  .step p{margin:0;color:var(--muted);font-size:13px}
+  .step code{font-family:var(--mono);font-size:12px;color:var(--signal)}
+
+  .note{display:flex;gap:14px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);
+    border-radius:14px;padding:20px 22px;color:var(--muted);font-size:14px;margin-bottom:60px}
+  .note .k{color:var(--signal);font-size:20px;line-height:1}
+  .note b{color:var(--ink);font-weight:600}
+  footer{border-top:1px solid var(--line-soft);padding:26px 0 40px;color:var(--faint);font-family:var(--mono);font-size:12px}
+
+  [data-anim]{opacity:0;transform:translateY(14px);animation:rise .6s var(--ease) forwards}
+  @keyframes rise{to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion:reduce){[data-anim]{opacity:1;transform:none;animation:none}}
+
+  @media (max-width:880px){
+    .hero{grid-template-columns:1fr;gap:34px;padding:48px 0}
+    .preview{order:-1}
+    .feat{grid-template-columns:1fr}.cell,.cell.wide{grid-column:auto}
+    .steps{grid-template-columns:1fr 1fr}
+    .pv-cols{grid-template-columns:1fr 1fr}.pv-col:nth-child(3){display:none}
+  }
+</style>
+</head>
+<body>
+<div class="topbar"><div class="wrap" style="display:flex;align-items:center;justify-content:space-between;width:100%">
+  <span class="mark"><span class="dot"></span>outreach<b>·os</b></span>
+  <a class="btn btn-ghost btn-sm" href="/login">Giriş</a>
+</div></div>
+
+<div class="wrap">
+  <section class="hero">
+    <div>
+      <span class="pill" data-anim><span class="dot"></span>self-hosted · kendi anahtarın</span>
+      <h1 data-anim style="animation-delay:.05s">İş aramanı bir <span class="g">komuta paneline</span> çevir.</h1>
+      <p class="lede" data-anim style="animation-delay:.1s">Şirket keşfi, rol filtresi, mail taslakları ve yanıt takibi — hepsi tek yerel ekranda. Kendi profilinle özelleştir, kendi Claude anahtarını bağla. Veri senin makinende kalır.</p>
+      <div class="cta" data-anim style="animation-delay:.15s">
+        <a class="btn" href="/login">Panele gir →</a>
+        <a class="btn btn-ghost" href="#nasil">Nasıl çalışır</a>
+      </div>
+      <div class="kbd" data-anim style="animation-delay:.2s"><code>python src/app.py</code> · bir komut, sıfır bulut</div>
+    </div>
+
+    <div class="preview" data-anim style="animation-delay:.12s" aria-hidden="true">
+      <div class="pv-bar"><span class="t"></span><span class="t"></span><span class="t"></span><span class="who">outreach·os — bugün</span></div>
+      <div class="pv-kpi">
+        <div><div class="n mono">67</div><div class="l">şirket</div></div>
+        <div><div class="n mono sig">38</div><div class="l">bugün</div></div>
+        <div><div class="n mono">11</div><div class="l">taslak</div></div>
+        <div><div class="n mono">2</div><div class="l">aday</div></div>
+      </div>
+      <div class="pv-cols">
+        <div class="pv-col"><div class="h"><span>Araştırılmadı</span><span class="mono faint">3</span></div>
+          <div class="pv-card"><div class="f">Zephlen AI</div><div class="s">İTÜ Çekirdek startup</div></div>
+          <div class="pv-card"><div class="f">UPley</div><div class="s">eğitim oyunu</div></div>
+        </div>
+        <div class="pv-col"><div class="h"><span>Taslak</span><span class="mono faint">4</span></div>
+          <div class="pv-card"><div class="f">Kamion <span class="badge" data-st="TASLAK" style="font-size:9px">TASLAK</span></div><div class="s">YC · lojistik ✉️</div></div>
+          <div class="pv-card"><div class="f">HockeyStack</div><div class="s">B2B revenue data</div></div>
+        </div>
+        <div class="pv-col"><div class="h"><span>Aday</span><span class="mono sig">2</span></div>
+          <div class="pv-card" style="border-color:var(--signal-dim)"><div class="f">Raycast <span class="badge" data-st="ADAY" style="font-size:9px">ADAY</span></div><div class="s">remote CET±3</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="eyebrow">// ne yapar</div>
+    <div class="feat">
+      <div class="cell wide"><span class="ic">✉️</span><h3>AI taslak, senin anahtarınla</h3><p>Kendi Anthropic anahtarını bağla; Claude her şirkete profiline dayalı, uydurmasız bir mail taslağı yazar. Asla otomatik göndermez — gönderim kararı hep sende.</p></div>
+      <div class="cell wide"><span class="ic">🎯</span><h3>Zero-tolerance rol filtresi</h3><p>Senior / kıdemli / uygunsuz anahtar kelimeler otomatik elenir. "Sr. Frontend" ilanı hiçbir tabloya girmez — not düşerek dahil edilmez.</p></div>
+      <div class="cell"><span class="ic">🗂️</span><h3>Kanban + tablo</h3><p>Sürükle-bırak durum yönetimi, filtreli tablo, audit geçmişi.</p></div>
+      <div class="cell"><span class="ic">🔒</span><h3>Kişisel ayrımı</h3><p>Tanıdık/arkadaş şirketleri otomasyon dışı; yalnızca manuel karar.</p></div>
+      <div class="cell"><span class="ic">⚙️</span><h3>Tamamen senin</h3><p>Profil, projeler, limitler ayarlardan. Kod anahtar gömmez.</p></div>
+    </div>
+  </section>
+
+  <section class="section" id="nasil">
+    <div class="eyebrow">// nasıl çalışır</div>
+    <div class="steps">
+      <div class="step"><span class="n">01</span><b>Kur</b><p><code>migrate.py</code> → <code>app.py</code>, tek komut.</p></div>
+      <div class="step"><span class="n">02</span><b>Profilini gir</b><p>Projelerini ve rol filtrelerini ayarlardan tanımla.</p></div>
+      <div class="step"><span class="n">03</span><b>Anahtarını bağla</b><p>Kendi Anthropic API anahtarını yapıştır.</p></div>
+      <div class="step"><span class="n">04</span><b>Yönet</b><p>Şirket ekle, AI taslak üret, durumları izle.</p></div>
+    </div>
+  </section>
+
+  <div class="note">
+    <span class="k">◆</span>
+    <div><b>Gizlilik önce.</b> Bu bir self-host uygulaması. Verilerin (<span class="mono">tracker.db</span>) ve API anahtarların yalnızca senin çalıştırdığın sunucuda durur. Kod hiçbir yere veri göndermez; AI çağrıları doğrudan senin anahtarınla Anthropic'e gider. Gmail entegrasyonu yalnızca taslak oluşturur.</div>
+  </div>
+
+  <footer>outreach·os — açık ürün · kendi instance'ını çalıştır, kendi anahtarını bağla</footer>
+</div>
+</body>
+</html>

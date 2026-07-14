@@ -1,0 +1,40 @@
+{
+  "profile": {
+    "name": "Adın Soyadın",
+    "email": "seninmailin@example.com",
+    "title": "Software Engineer / AI Engineer",
+    "location": "İstanbul, TR; remote'a açık",
+    "portfolio": "seninsiten.com",
+    "github": "github.com/kullanici",
+    "linkedin": "/in/kullanici",
+    "projects": {
+      "ProjeAdi": "Projenin kısa açıklaması — hangi teknoloji, ne başardı."
+    },
+    "project_sector_mapping": {
+      "yazilim_ai_ml": "En güçlü ML/AI projen",
+      "urun_fullstack": "En iyi full-stack ürünün"
+    },
+    "role_filters": {
+      "seniority_include": ["Junior", "Entry Level", "New Grad", "Yeni Mezun", "0-2 yıl"],
+      "seniority_exclude_keywords": ["Senior", "Sr.", "Lead", "Staff", "Principal", "Manager", "Director", "Kıdemli", "5+ years", "5+ yıl"],
+      "role_categories_include": {
+        "software_ai_ml": ["Software Engineer", "Backend", "Full Stack", "AI Engineer", "ML Engineer"]
+      },
+      "title_exclude_keywords_hard": ["QA Engineer", "Test Engineer", "Data Entry", "Customer Support", "Call Center"],
+      "title_exclude_keywords_unless_fullstack": ["Frontend Developer", "UI Developer"],
+      "zero_tolerance_rule": "seniority_exclude veya title_exclude_hard eşleşirse ilan HİÇBİR tabloya girmez."
+    }
+  },
+  "excluded_sectors": [],
+  "excluded_companies_seed": [],
+  "excluded_companies_seed_personal": [],
+  "companies_already_contacted": {},
+  "companies_logged_portal_only": [],
+  "processed_posting_urls": [],
+  "job_connectors": {},
+  "daily_caps": {
+    "max_new_gmail_drafts_per_run": 6,
+    "max_new_ats_digest_items_per_run": 15,
+    "max_outreach_per_company_days": 30
+  }
+}

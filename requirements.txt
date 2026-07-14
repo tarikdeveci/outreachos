@@ -1,0 +1,3 @@
+# Çekirdek dashboard sıfır bağımlılıdır (Python stdlib).
+# Yalnızca AI (BYOK) özellikleri için gereklidir:
+anthropic>=0.40

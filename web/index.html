@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OutreachOS — Panel</title>
+<link rel="stylesheet" href="/theme.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  .app{max-width:1360px;margin:0 auto;padding:0 20px}
+  .topbar{position:sticky;top:0;z-index:var(--z-sticky);
+    background:oklch(0.185 0.008 40 / .82);backdrop-filter:blur(10px);border-bottom:1px solid var(--line-soft);
+    display:flex;align-items:center;justify-content:space-between;gap:16px;height:60px;flex-wrap:wrap}
+  .mark{font-family:var(--mono);font-weight:600;font-size:14px;display:flex;align-items:center;gap:9px}
+  .mark .dot{width:8px;height:8px;border-radius:50%;background:var(--signal);box-shadow:0 0 10px var(--signal)}
+  .mark b{color:var(--signal)}
+  .nav{display:flex;gap:2px;background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:3px}
+  .tabbtn{background:none;border:0;color:var(--muted);font-size:13px;font-weight:500;padding:7px 13px;border-radius:8px;cursor:pointer;transition:background .16s var(--ease),color .16s var(--ease)}
+  .tabbtn:hover{color:var(--ink)}
+  .tabbtn.on{background:var(--surface-2);color:var(--ink)}
+  .right{display:flex;align-items:center;gap:12px}
+  .sub{color:var(--faint);font-family:var(--mono);font-size:12px}
+  .lnk{background:none;border:0;color:var(--faint);font-size:13px;cursor:pointer;padding:6px}
+  .lnk:hover{color:var(--st-elenen)}
+
+  main{padding:24px 0 60px}
+  .tab{display:none}.tab.show{display:block;animation:fade .2s var(--ease)}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}
+  .kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px}
+  .kpi .n{font-family:var(--mono);font-size:30px;font-weight:600;line-height:1}
+  .kpi .l{color:var(--faint);font-size:12px;margin-top:8px}
+  .kpi.sig .n{color:var(--signal)} .kpi.aday .n{color:var(--st-aday)}
+  .kpi.taslak .n{color:var(--st-taslak)} .kpi.elenen .n{color:var(--st-elenen)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .ph{font-size:13px;font-weight:600;color:var(--muted);margin:0 0 12px}
+  .caps{font-family:var(--mono);font-size:13px}.caps b{color:var(--st-taslak)}
+  .switch{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer}
+  .switch input{accent-color:var(--signal)}
+
+  /* kanban */
+  .board{display:flex;gap:12px;overflow-x:auto;padding-bottom:12px}
+  .col{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:10px;width:288px;flex-shrink:0}
+  .col.drop{outline:2px dashed var(--signal);outline-offset:-3px}
+  .col-h{display:flex;justify-content:space-between;align-items:center;padding:2px 4px 10px}
+  .col-h .c{font-family:var(--mono);color:var(--faint);font-size:12px}
+  .col-list{min-height:36px;display:flex;flex-direction:column;gap:8px}
+  .kcard{background:var(--surface-2);border:1px solid var(--line-soft);border-radius:9px;padding:10px 11px;cursor:grab;transition:border-color .15s var(--ease),transform .1s var(--ease)}
+  .kcard:hover{border-color:var(--signal-dim)}
+  .kcard:active{cursor:grabbing}
+  .kcard .f{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px;justify-content:space-between}
+  .kcard .s{font-size:11.5px;color:var(--faint);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kcard .m{font-size:11px;color:var(--muted);margin-top:5px;display:flex;gap:6px;align-items:center}
+
+  /* table */
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .filters .field{flex:0 0 auto;width:auto;padding:8px 11px;font-size:13px}
+  .filters .grow{flex:1 1 200px}
+  .tablewrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead th{text-align:left;padding:11px 12px;color:var(--faint);font-size:11px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;border-bottom:1px solid var(--line)}
+  tbody tr{border-bottom:1px solid var(--line-soft);cursor:pointer;transition:background .12s var(--ease)}
+  tbody tr:last-child{border-bottom:0}
+  tbody tr:hover{background:var(--surface-2)}
+  td{padding:11px 12px;vertical-align:middle}
+  td .f{font-weight:600}
+  td .meta{color:var(--faint);font-size:12px}
+  td.date{font-family:var(--mono);color:var(--faint);font-size:12px}
+  .iconlink{color:var(--st-ats);text-decoration:none;font-size:15px}
+
+  /* personal */
+  .pgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+  .pcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:15px}
+  .pcard .top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px}
+  .pcard .f{font-weight:600;display:flex;align-items:center;gap:6px}
+
+  /* settings */
+  .setgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .ok{color:var(--signal);font-size:12px;min-height:16px;margin-top:8px}
+  .bad{color:var(--st-elenen)}
+  .aistate{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  textarea.code{font-family:var(--mono);font-size:12px;line-height:1.5}
+
+  /* drawer */
+  .backdrop{position:fixed;inset:0;background:oklch(0 0 0 / .55);z-index:var(--z-backdrop);opacity:0;pointer-events:none;transition:opacity .2s var(--ease)}
+  .backdrop.show{opacity:1;pointer-events:auto}
+  .drawer{position:fixed;top:0;right:0;height:100%;width:100%;max-width:440px;z-index:var(--z-drawer);
+    background:var(--surface);border-left:1px solid var(--line);padding:22px;overflow-y:auto;
+    transform:translateX(100%);transition:transform .24s var(--ease)}
+  .drawer.show{transform:none}
+  .dhead{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:14px}
+  .dhead h2{margin:0;font-size:18px;font-weight:600;letter-spacing:-.01em}
+  .x{background:none;border:0;color:var(--faint);font-size:20px;cursor:pointer;line-height:1}
+  .x:hover{color:var(--ink)}
+  .dgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:12px;margin:14px 0}
+  .dgrid .k{color:var(--faint);font-size:11px}.dgrid .v{color:var(--ink);margin-top:2px}
+  .dgrid .full{grid-column:1/-1}
+  .aiout{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:14px;font-size:12.5px;line-height:1.55;white-space:pre-wrap;margin:12px 0}
+  .aiout.hidden{display:none}
+  .audit .row{color:var(--faint);font-size:12px;padding:3px 0}
+  .audit .row b{color:var(--muted)}
+  .empty{color:var(--faint);text-align:center;padding:40px 20px;font-size:13px}
+
+  /* add dialog */
+  .dlg{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:16px;
+    padding:24px;width:min(520px,92vw);box-shadow:0 30px 70px oklch(0 0 0 / .5)}
+  .dlg::backdrop{background:oklch(0 0 0 / .55)}
+  .dlg[open]{animation:pop .2s var(--ease)}
+  @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+
+  @media (max-width:760px){
+    .two,.setgrid{grid-template-columns:1fr}
+    .topbar{height:auto;padding:10px 0}.sub{display:none}
+  }
+</style>
+</head>
+<body>
+<header class="topbar"><div class="app" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;width:100%">
+  <span class="mark"><span class="dot"></span>outreach<b>·os</b></span>
+  <nav class="nav">
+    <button class="tabbtn on" data-tab="overview">Genel Bakış</button>
+    <button class="tabbtn" data-tab="kanban">Kanban</button>
+    <button class="tabbtn" data-tab="table">Tablo</button>
+    <button class="tabbtn" data-tab="personal">Kişisel</button>
+    <button class="tabbtn" data-tab="settings">Ayarlar</button>
+  </nav>
+  <div class="right"><span class="sub" id="sub"></span><button class="btn btn-sm" onclick="openAdd()">+ Ekle</button><button class="lnk" onclick="logout()">Çıkış</button></div>
+</div></header>
+
+<main class="app">
+  <!-- OVERVIEW -->
+  <section id="overview" class="tab show">
+    <div class="kpis">
+      <div class="kpi"><div class="n mono" id="kpiTotal">–</div><div class="l">Toplam şirket</div></div>
+      <div class="kpi sig"><div class="n mono" id="kpiToday">–</div><div class="l">Bugün yeni temas</div></div>
+      <div class="kpi aday"><div class="n mono" id="kpiAday">–</div><div class="l">Aday</div></div>
+      <div class="kpi taslak"><div class="n mono" id="kpiTaslak">–</div><div class="l">Taslak</div></div>
+      <div class="kpi elenen"><div class="n mono" id="kpiElenen">–</div><div class="l">Elenen</div></div>
+    </div>
+    <div class="two">
+      <div class="panel"><p class="ph">Durum dağılımı</p><canvas id="chStatus" height="210"></canvas></div>
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <p class="ph" style="margin:0">Günlük taslak limiti</p>
+          <label class="switch"><input type="checkbox" id="capsToggle"> aktif</label>
+        </div>
+        <div class="caps" id="capsBox"></div>
+        <p class="ph" style="margin:22px 0 12px">Günlük trend</p>
+        <canvas id="chDaily" height="150"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <!-- KANBAN -->
+  <section id="kanban" class="tab">
+    <div class="board" id="board"></div>
+    <p class="sub" style="margin-top:8px">Kartı sürükleyip başka kolona bırakarak durumu değiştir. Elenenler Tablo sekmesinde.</p>
+  </section>
+
+  <!-- TABLE -->
+  <section id="table" class="tab">
+    <div class="filters">
+      <input id="fq" class="field grow" placeholder="Ara: firma / sektör / not…">
+      <select id="fdurum" class="field"></select>
+      <input id="fsektor" class="field" placeholder="Sektör" style="width:130px">
+      <input id="fproje" class="field" placeholder="Proje" style="width:120px">
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Firma</th><th>Durum</th><th>Sektör</th><th>Proje</th><th>Kanal</th><th>Tarih</th><th></th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- PERSONAL -->
+  <section id="personal" class="tab">
+    <p class="sub" style="margin-bottom:14px">Kişisel tanıdık / arkadaş şirketleri ve manuel karar bekleyenler — otomatik mail atılmaz.</p>
+    <div class="pgrid" id="personalList"></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="settings" class="tab">
+    <div class="setgrid">
+      <div class="panel">
+        <p class="ph">🔑 API Anahtarları (BYOK)</p>
+        <p class="sub" style="margin:-6px 0 16px">Kendi anahtarların, yalnızca bu sunucuda saklanır. Boş alan mevcut değeri korur.</p>
+        <label class="lbl">Anthropic API Key <span class="aistate" id="aiState"></span></label>
+        <input id="setAnthropic" class="field" type="password" placeholder="sk-ant-…" style="margin-bottom:14px">
+        <div class="two" style="gap:10px">
+          <div><label class="lbl">Arama sağlayıcı</label>
+            <select id="setProvider" class="field"><option value="">(yok)</option><option value="serpapi">SerpAPI</option><option value="google">Google CSE</option><option value="bing">Bing</option></select></div>
+          <div><label class="lbl">Arama API Key</label><input id="setSearch" class="field" type="password" placeholder="••••"></div>
+        </div>
+        <label class="switch" style="margin-top:14px"><input type="checkbox" id="setCaps"> Günlük taslak limiti aktif</label>
+        <button class="btn" style="width:100%;margin-top:16px" onclick="saveKeys()">Anahtarları kaydet</button>
+        <div class="ok" id="keysMsg"></div>
+      </div>
+      <div class="panel">
+        <p class="ph">👤 Profil (JSON)</p>
+        <p class="sub" style="margin:-6px 0 16px">Adın, projelerin, rol filtrelerin. AI taslakları buna göre yazılır. Geçerli JSON olmalı.</p>
+        <textarea id="setProfile" class="field code" rows="15" spellcheck="false"></textarea>
+        <button class="btn btn-sub" style="width:100%;margin-top:14px" onclick="saveProfile()">Profili kaydet</button>
+        <div class="ok" id="profMsg"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="backdrop" id="backdrop" onclick="closeDrawer()"></div>
+<aside class="drawer" id="drawer"><div id="drawerBody"></div></aside>
+
+<dialog id="addDlg" class="dlg">
+  <form id="addForm" method="dialog">
+    <div class="dhead"><h2>Şirket ekle</h2><button type="button" class="x" onclick="addDlg.close()">✕</button></div>
+    <label class="lbl">Firma *</label><input name="firma" class="field" required autofocus style="margin-bottom:12px">
+    <div class="two" style="gap:10px">
+      <div><label class="lbl">Sektör</label><input name="sektor" class="field"></div>
+      <div><label class="lbl">Kanal</label><input name="kanal" class="field" placeholder="gmail_draft / ats_digest…"></div>
+    </div>
+    <div class="two" style="gap:10px;margin-top:12px">
+      <div><label class="lbl">Proje eşleşmesi</label><input name="proje_eslesme" class="field"></div>
+      <div><label class="lbl">Durum</label><select name="durum" id="addDurum" class="field"></select></div>
+    </div>
+    <label class="lbl" style="margin-top:12px">E-posta / Link</label><input name="eposta_veya_link" class="field">
+    <label class="switch" style="margin-top:14px"><input type="checkbox" name="is_personal"> Kişisel/tanıdık şirketi</label>
+    <div style="display:flex;gap:8px;margin-top:18px">
+      <button type="button" class="btn btn-ghost" style="flex:1" onclick="addDlg.close()">Vazgeç</button>
+      <button type="submit" class="btn" style="flex:1">Ekle</button>
+    </div>
+    <div class="ok bad" id="addMsg"></div>
+  </form>
+</dialog>
+
+<script>
+const $=s=>document.querySelector(s);
+const api=(p,o)=>fetch('/api'+p,o).then(r=>r.json());
+let META={statuses:[],kanban_columns:[]}, CO=[], charts={}, SESSION={};
+const STC={TASLAK:'#e2a03e',ATS_DIGEST:'#46adba',ADAY:'#ee6a4d',FORM_DOLDURULDU:'#b487e6',BEKLIYOR:'#d9c257',ARASTIRILMADI:'#9c968f'};
+const stColor=d=>STC[d]|| (String(d).startsWith('ELENEN')?'#8f7a68':'#9c968f');
+const badge=d=>`<span class="badge" data-st="${esc(d)}">${esc(d)}</span>`;
+const esc=s=>String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+const debounce=(fn,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms)}};
+
+if(window.Chart){Chart.defaults.color='#9c968f';Chart.defaults.borderColor='#3a352f';Chart.defaults.font.family='ui-sans-serif,system-ui,sans-serif';Chart.defaults.font.size=11;}
+
+function tab(name){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('show'));
+  $('#'+name).classList.add('show');
+  document.querySelectorAll('.tabbtn').forEach(b=>b.classList.toggle('on',b.dataset.tab===name));
+  if(name==='kanban')renderKanban();
+  if(name==='table')renderTable();
+  if(name==='personal')renderPersonal();
+  if(name==='settings')loadSettings();
+}
+document.querySelectorAll('.tabbtn').forEach(b=>b.onclick=()=>tab(b.dataset.tab));
+
+async function boot(){
+  SESSION=await api('/session');
+  if(!SESSION.authed){location.href='/login';return;}
+  META=await api('/meta');
+  const fd=$('#fdurum');fd.innerHTML='<option value="">Tüm durumlar</option>'+META.statuses.map(s=>`<option>${s}</option>`).join('');
+  ['fq','fsektor','fproje'].forEach(id=>$('#'+id).oninput=debounce(renderTable,250));
+  fd.onchange=renderTable;
+  await loadCompanies(); await overview();
+}
+async function loadCompanies(){ CO=await api('/companies'); }
+
+/* overview */
+async function overview(){
+  const s=await api('/stats');
+  const prof=await api('/profile');
+  $('#sub').textContent=`${prof.name?prof.name+' · ':''}son çalışma ${s.latest_date||'—'}`;
+  $('#kpiTotal').textContent=s.total;$('#kpiToday').textContent=s.today_new;
+  $('#kpiAday').textContent=s.aday;$('#kpiTaslak').textContent=s.taslak;$('#kpiElenen').textContent=s.elenen;
+  const cap=(s.daily_caps||{}).max_new_gmail_drafts_per_run;
+  $('#capsToggle').checked=s.daily_caps_enabled;
+  $('#capsToggle').onchange=e=>api('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({daily_caps_enabled:e.target.checked})});
+  const capTxt=cap>=999?'sınırsız':cap;
+  $('#capsBox').innerHTML=`Bugün taslak: <b>${s.today_drafts}</b> · limit: <b style="color:var(--muted)">${capTxt}</b>`;
+  drawStatus(s.by_status);drawDaily(s.daily);
+}
+function drawStatus(by){
+  const labels=Object.keys(by),data=labels.map(l=>by[l]);
+  charts.status?.destroy();
+  charts.status=new Chart($('#chStatus'),{type:'doughnut',data:{labels,datasets:[{data,backgroundColor:labels.map(stColor),borderColor:'#3a352f',borderWidth:2}]},
+    options:{cutout:'62%',plugins:{legend:{position:'right',labels:{boxWidth:9,boxHeight:9,padding:8,font:{size:10}}}}}});
+}
+function drawDaily(daily){
+  charts.daily?.destroy();
+  charts.daily=new Chart($('#chDaily'),{type:'bar',data:{labels:daily.map(d=>d.tarih),datasets:[
+    {label:'Taslak',data:daily.map(d=>d.taslak_sayisi),backgroundColor:STC.TASLAK},
+    {label:'ATS',data:daily.map(d=>d.ats_sayisi),backgroundColor:STC.ATS_DIGEST},
+    {label:'Form',data:daily.map(d=>d.form_sayisi),backgroundColor:STC.FORM_DOLDURULDU}]},
+    options:{scales:{x:{stacked:true,grid:{display:false}},y:{stacked:true,grid:{color:'#332e29'}}},plugins:{legend:{labels:{boxWidth:9,boxHeight:9,font:{size:10}}}}}});
+}
+
+/* kanban */
+function renderKanban(){
+  const board=$('#board');board.innerHTML='';
+  META.kanban_columns.forEach(col=>{
+    const items=CO.filter(c=>c.durum===col&&!c.is_elenen);
+    const el=document.createElement('div');el.className='col';el.dataset.col=col;
+    el.innerHTML=`<div class="col-h">${badge(col)}<span class="c">${items.length}</span></div><div class="col-list"></div>`;
+    const list=el.querySelector('.col-list');
+    items.forEach(c=>list.appendChild(kcard(c)));
+    el.ondragover=e=>{e.preventDefault();el.classList.add('drop')};
+    el.ondragleave=()=>el.classList.remove('drop');
+    el.ondrop=e=>{e.preventDefault();el.classList.remove('drop');moveCard(+e.dataTransfer.getData('id'),col)};
+    board.appendChild(el);
+  });
+}
+function kcard(c){
+  const d=document.createElement('div');d.className='kcard';d.draggable=true;
+  d.ondragstart=e=>e.dataTransfer.setData('id',c.id);
+  d.onclick=()=>openDrawer(c.id);
+  d.innerHTML=`<div class="f"><span>${esc(c.firma)}${c.is_personal?' 👤':''}</span></div>
+    <div class="s">${esc(c.sektor||'')}</div>
+    <div class="m">${esc(c.proje_eslesme||'')}${c.draft_url?' <span style="color:var(--st-ats)">✉️</span>':''}</div>`;
+  return d;
+}
+async function moveCard(id,col){
+  await api('/company/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({durum:col})});
+  await loadCompanies();renderKanban();
+}
+
+/* table */
+async function renderTable(){
+  const q=new URLSearchParams();
+  if($('#fq').value)q.set('q',$('#fq').value);
+  if($('#fdurum').value)q.set('durum',$('#fdurum').value);
+  if($('#fsektor').value)q.set('sektor',$('#fsektor').value);
+  if($('#fproje').value)q.set('proje',$('#fproje').value);
+  const rows=await api('/companies?'+q.toString());
+  $('#tbody').innerHTML=rows.map(c=>`<tr onclick="openDrawer(${c.id})">
+    <td><span class="f">${esc(c.firma)}</span>${c.is_personal?' 👤':''}</td>
+    <td>${badge(c.durum)}</td>
+    <td class="meta">${esc(c.sektor||'')}</td>
+    <td class="meta">${esc(c.proje_eslesme||'')}</td>
+    <td class="meta">${esc(c.kanal||'')}</td>
+    <td class="date">${esc(c.tarih||'')}</td>
+    <td>${c.draft_url?`<a class="iconlink" href="${c.draft_url}" target="_blank" onclick="event.stopPropagation()">✉</a>`:''}</td>
+  </tr>`).join('')||`<tr><td colspan="7"><div class="empty">Bu filtreyle eşleşen şirket yok.</div></td></tr>`;
+}
+
+/* personal */
+function renderPersonal(){
+  const items=CO.filter(c=>c.is_personal||c.durum==='BEKLIYOR'||c.durum==='ELENEN_KISISEL');
+  $('#personalList').innerHTML=items.map(c=>`<div class="pcard">
+    <div class="top"><span class="f">👤 ${esc(c.firma)}</span>${badge(c.durum)}</div>
+    <div class="meta faint" style="font-size:12px">${esc(c.sektor||'')}</div>
+    <button class="lnk" style="color:var(--st-ats);padding:8px 0 0" onclick="openDrawer(${c.id})">Detay / manuel karar →</button>
+  </div>`).join('')||'<div class="empty">Kişisel/bekleyen kayıt yok. Bir şirketi detayından "kişisel" işaretleyebilirsin.</div>';
+}
+
+/* drawer */
+async function openDrawer(id){
+  const {company:c,audit}=await api('/company/'+id);
+  $('#backdrop').classList.add('show');$('#drawer').classList.add('show');
+  $('#drawerBody').innerHTML=`
+    <div class="dhead"><h2>${esc(c.firma)}</h2><button class="x" onclick="closeDrawer()">✕</button></div>
+    ${c.draft_url?`<a class="btn btn-sub btn-sm" href="${c.draft_url}" target="_blank" style="margin-bottom:12px">✉️ Gmail taslağını aç</a>`:''}
+    ${c.is_personal?'':`<div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="btn btn-sm" style="flex:1" onclick="aiDraft(${c.id})">✨ AI taslak üret</button>
+      <button class="btn btn-sub btn-sm" style="flex:1" onclick="aiMatch(${c.id})">🎯 Proje eşleştir</button></div>`}
+    <div id="aiOut" class="aiout hidden"></div>
+    <label class="lbl">Durum</label>
+    <select id="dDurum" class="field" style="margin-bottom:14px">${META.statuses.map(s=>`<option ${s===c.durum?'selected':''}>${s}</option>`).join('')}</select>
+    <div class="dgrid">
+      <div><div class="k">Sektör</div><div class="v">${esc(c.sektor||'-')}</div></div>
+      <div><div class="k">Kanal</div><div class="v">${esc(c.kanal||'-')}</div></div>
+      <div><div class="k">Proje</div><div class="v">${esc(c.proje_eslesme||'-')}</div></div>
+      <div><div class="k">Tarih</div><div class="v mono">${esc(c.tarih||'-')}</div></div>
+      <div class="full"><div class="k">E-posta / Link</div><div class="v" style="word-break:break-all">${esc(c.eposta_veya_link||'-')}</div></div>
+      ${c.durum_raw&&c.durum_raw!==c.durum?`<div class="full"><div class="k">Ham durum</div><div class="v faint">${esc(c.durum_raw)}</div></div>`:''}
+    </div>
+    <label class="switch" style="margin-bottom:14px"><input type="checkbox" id="dPersonal" ${c.is_personal?'checked':''}> Kişisel/tanıdık şirketi (otomasyon dışı)</label>
+    <label class="lbl">Notlar</label>
+    <textarea id="dNot" class="field" rows="4" style="margin-bottom:14px">${esc(c.notlar||'')}</textarea>
+    <button class="btn" style="width:100%" onclick="saveDrawer(${c.id})">Kaydet</button>
+    <div class="audit" style="margin-top:20px">
+      <div class="k faint" style="font-size:11px;margin-bottom:6px">GEÇMİŞ</div>
+      ${audit.length?audit.map(a=>`<div class="row"><b>${esc(a.alan)}</b>: ${esc(a.eski_deger||'∅')} → ${esc(a.yeni_deger||'∅')} <span class="faint">${(a.zaman||'').slice(0,16).replace('T',' ')}</span></div>`).join(''):'<div class="row faint">Henüz değişiklik yok.</div>'}
+    </div>`;
+}
+function aiBusy(m){const o=$('#aiOut');o.classList.remove('hidden');o.textContent=m;}
+async function aiDraft(id){aiBusy('✨ Claude taslak yazıyor…');const r=await api('/company/'+id+'/draft',{method:'POST'});
+  $('#aiOut').textContent=r.ok?((r.subject?'Konu: '+r.subject+'\n\n':'')+r.body):'⚠️ '+(r.error||'Hata');}
+async function aiMatch(id){aiBusy('🎯 Eşleştiriliyor…');const r=await api('/company/'+id+'/match',{method:'POST'});
+  $('#aiOut').textContent=r.ok?('Önerilen proje: '+(r.proje||'-')+'\n\n'+(r.gerekce||'')):'⚠️ '+(r.error||'Hata');}
+async function saveDrawer(id){
+  await api('/company/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({durum:$('#dDurum').value,notlar:$('#dNot').value,is_personal:$('#dPersonal').checked})});
+  await loadCompanies();closeDrawer();overview();
+  const a=document.querySelector('.tab.show').id;
+  if(a==='table')renderTable();if(a==='kanban')renderKanban();if(a==='personal')renderPersonal();
+}
+function closeDrawer(){$('#backdrop').classList.remove('show');$('#drawer').classList.remove('show');}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();});
+
+/* settings */
+async function loadSettings(){
+  const s=await api('/settings');
+  $('#setProvider').value=s.search_provider||'';
+  $('#setAnthropic').placeholder=s.anthropic_key_masked||(s.anthropic_env?'(ortam değişkeninden)':'sk-ant-…');
+  $('#setSearch').placeholder=s.search_key_masked||'••••';
+  $('#setCaps').checked=!!s.daily_caps_enabled;
+  $('#aiState').textContent=s.ai_available?(SESSION.ai_connected?'· bağlı ✓':'· bağlı değil'):'· SDK yok';
+  $('#setProfile').value=JSON.stringify(s.profile||{},null,2);
+}
+async function saveKeys(){
+  const body={search_provider:$('#setProvider').value,daily_caps_enabled:$('#setCaps').checked};
+  if($('#setAnthropic').value)body.anthropic_api_key=$('#setAnthropic').value;
+  if($('#setSearch').value)body.search_api_key=$('#setSearch').value;
+  await api('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  $('#keysMsg').textContent='Kaydedildi.';$('#setAnthropic').value='';$('#setSearch').value='';
+  SESSION=await api('/session');loadSettings();setTimeout(()=>$('#keysMsg').textContent='',2500);
+}
+async function saveProfile(){
+  let prof;const m=$('#profMsg');
+  try{prof=JSON.parse($('#setProfile').value);}catch(e){m.className='ok bad';m.textContent='Geçersiz JSON: '+e.message;return;}
+  await api('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profile:prof})});
+  m.className='ok';m.textContent='Profil kaydedildi.';overview();setTimeout(()=>m.textContent='',2500);
+}
+async function logout(){await api('/logout',{method:'POST'});location.href='/';}
+
+function openAdd(){
+  $('#addDurum').innerHTML=META.statuses.map(s=>`<option ${s==='ARASTIRILMADI'?'selected':''}>${s}</option>`).join('');
+  $('#addMsg').textContent=''; $('#addForm').reset(); $('#addDurum').value='ARASTIRILMADI';
+  addDlg.showModal();
+}
+$('#addForm').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const fd=new FormData(e.target);
+  const body={firma:fd.get('firma').trim(),sektor:fd.get('sektor'),kanal:fd.get('kanal'),
+    proje_eslesme:fd.get('proje_eslesme'),durum:fd.get('durum'),eposta_veya_link:fd.get('eposta_veya_link'),
+    is_personal:fd.get('is_personal')==='on'};
+  if(!body.firma){ $('#addMsg').textContent='Firma zorunlu.'; return; }
+  const r=await fetch('/api/companies',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!r.ok){ $('#addMsg').textContent=((await r.json()).error)||'Hata'; return; }
+  addDlg.close();
+  await loadCompanies(); overview();
+  const a=document.querySelector('.tab.show').id;
+  if(a==='table')renderTable(); if(a==='kanban')renderKanban(); if(a==='personal')renderPersonal();
+});
+boot();
+</script>
+</body>
+</html>

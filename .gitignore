@@ -1,0 +1,20 @@
+# --- Kişisel veri & sırlar (ASLA commit edilmez) ---
+tracker.db
+state.json
+outreach_log.csv
+outreach_tracker.xlsx
+credentials.json
+token.json
+.env
+cv/
+gunluk_ozet/
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
