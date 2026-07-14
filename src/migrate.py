@@ -17,11 +17,20 @@ from db import (  # noqa: E402
 
 
 def load_state():
-    with open(STATE_PATH, "r", encoding="utf-8") as f:
+    # Temiz kurulum: state.json yoksa state.example.json'a düş, o da yoksa boş başla.
+    path = STATE_PATH if os.path.exists(STATE_PATH) else \
+        os.path.join(os.path.dirname(STATE_PATH), "state.example.json")
+    if not os.path.exists(path):
+        print("[migrate] state.json/state.example.json yok — boş profil ile başlanıyor.")
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def load_csv_rows():
+    # Temiz kurulumda outreach_log.csv olmayabilir — boş liste dön.
+    if not os.path.exists(CSV_PATH):
+        return []
     with open(CSV_PATH, "r", encoding="utf-8-sig") as f:
         return list(csv.DictReader(f))
 
