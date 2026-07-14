@@ -21,12 +21,13 @@ from db import (  # noqa: E402
 )
 import auth  # noqa: E402
 import ai  # noqa: E402
+import gmail  # noqa: E402
 
 PORT = int(os.environ.get("DASHBOARD_PORT", "8787"))
 HOST = os.environ.get("DASHBOARD_HOST", "127.0.0.1")  # Docker/deploy'da 0.0.0.0
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
-PUBLIC_API = {"/api/session", "/api/setup", "/api/login", "/api/logout"}
+PUBLIC_API = {"/api/session", "/api/setup", "/api/login", "/api/logout", "/api/gmail/callback"}
 
 
 def ensure_db():
@@ -123,6 +124,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _body_json(self):
         length = int(self.headers.get("Content-Length", 0) or 0)
         if not length:
@@ -171,6 +178,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_profile()
         if p == "/api/settings":
             return self.api_get_settings()
+        if p == "/api/gmail/connect":
+            return self.api_gmail_connect()
+        if p == "/api/gmail/callback":
+            return self.api_gmail_callback(q)
         return self.send_error(404)
 
     # ---------- POST ----------
@@ -193,6 +204,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.api_ai_draft(int(p.split("/")[3]))
         if p.startswith("/api/company/") and p.endswith("/match"):
             return self.api_ai_match(int(p.split("/")[3]))
+        if p.startswith("/api/company/") and p.endswith("/gmail-draft"):
+            return self.api_gmail_draft(int(p.split("/")[3]))
+        if p.startswith("/api/company/") and p.endswith("/gmail-check"):
+            return self.api_gmail_check(int(p.split("/")[3]))
+        if p == "/api/gmail/disconnect":
+            return self.api_gmail_disconnect()
         return self.send_error(404)
 
     def do_PATCH(self):
@@ -261,6 +278,9 @@ class Handler(BaseHTTPRequestHandler):
             "anthropic_env": bool(os.environ.get("ANTHROPIC_API_KEY")),
             "search_provider": cfg_get(conn, "search_provider", ""),
             "search_key_masked": mask_key(cfg_get(conn, "search_api_key")),
+            "search_cx": cfg_get(conn, "search_cx", ""),
+            "gmail_client_masked": mask_key(cfg_get(conn, "gmail_client_id")),
+            "gmail_connected": bool(cfg_get(conn, "gmail_refresh_token")),
             "daily_caps_enabled": (cfg_get(conn, "daily_caps_enabled", "true") == "true"),
             "ai_available": ai.available(),
         }
@@ -274,13 +294,90 @@ class Handler(BaseHTTPRequestHandler):
             conn.execute(
                 "INSERT INTO profile (id, data_json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data_json=excluded.data_json",
                 (json.dumps(data["profile"], ensure_ascii=False),))
-        for key in ("anthropic_api_key", "search_api_key", "search_provider"):
+        for key in ("anthropic_api_key", "search_api_key", "search_provider", "search_cx",
+                    "gmail_client_id", "gmail_client_secret"):
             if data.get(key):  # boş gönderilirse mevcut değeri koru
                 cfg_set(conn, key, data[key].strip())
         if "daily_caps_enabled" in data:
             cfg_set(conn, "daily_caps_enabled", "true" if data["daily_caps_enabled"] else "false")
         conn.commit(); conn.close()
         self._json({"ok": True})
+
+    # ---------- Gmail OAuth ----------
+    def _base_url(self):
+        host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host", "localhost:8787")
+        proto = self.headers.get("X-Forwarded-Proto") or ("https" if "pythonanywhere.com" in host else "http")
+        return f"{proto}://{host}"
+
+    def _gmail_config(self, conn):
+        return {"client_id": cfg_get(conn, "gmail_client_id", ""),
+                "client_secret": cfg_get(conn, "gmail_client_secret", ""),
+                "access_token": cfg_get(conn, "gmail_access_token", ""),
+                "refresh_token": cfg_get(conn, "gmail_refresh_token", ""),
+                "token_expires_at": cfg_get(conn, "gmail_token_expires_at", "0")}
+
+    def api_gmail_connect(self):
+        conn = get_conn(); cfg = self._gmail_config(conn); conn.close()
+        if not cfg["client_id"] or not cfg["client_secret"]:
+            return self._json({"error": "Önce Gmail OAuth Client ID ve Client Secret kaydedin."}, 400)
+        redirect_uri = self._base_url() + "/api/gmail/callback"
+        url, _ = gmail.authorization_url(cfg["client_id"], redirect_uri)
+        self._redirect(url)
+
+    def api_gmail_callback(self, q):
+        state = (q.get("state") or [""])[0]; code = (q.get("code") or [""])[0]
+        if not code or not gmail.valid_state(state):
+            return self._json({"error": "Geçersiz veya süresi dolmuş OAuth isteği."}, 400)
+        conn = get_conn(); cfg = self._gmail_config(conn)
+        try:
+            tokens = gmail.exchange_code(code, cfg["client_id"], cfg["client_secret"], self._base_url()+"/api/gmail/callback")
+            self._save_gmail_tokens(conn, tokens); conn.commit()
+        except Exception as e:
+            conn.close(); return self._json({"error": str(e)}, 400)
+        conn.close(); self._redirect("/app#settings")
+
+    def _save_gmail_tokens(self, conn, tokens):
+        for src, dst in (("access_token", "gmail_access_token"), ("refresh_token", "gmail_refresh_token")):
+            if tokens.get(src): cfg_set(conn, dst, tokens[src])
+        cfg_set(conn, "gmail_token_expires_at", str(__import__('time').time() + int(tokens.get("expires_in", 3600))))
+
+    def _gmail_token(self, conn):
+        cfg = self._gmail_config(conn)
+        return gmail.access_token(cfg, lambda t: (self._save_gmail_tokens(conn, t), conn.commit()))
+
+    def api_gmail_disconnect(self):
+        conn = get_conn()
+        for key in ("gmail_access_token", "gmail_refresh_token", "gmail_token_expires_at"):
+            conn.execute("DELETE FROM app_config WHERE anahtar=?", (key,))
+        conn.commit(); conn.close(); self._json({"ok": True})
+
+    def api_gmail_draft(self, cid):
+        company, profile, key = self._company_and_profile(cid)
+        if not company: return self.send_error(404)
+        to = (company.get("eposta_veya_link") or "").strip()
+        if "@" not in to: return self._json({"error": "Şirkette geçerli bir e-posta adresi yok."}, 400)
+        draft = ai.generate_draft(company, profile, key)
+        if not draft.get("ok"): return self._json(draft, 400)
+        conn = get_conn()
+        try:
+            created = gmail.create_draft(to, draft.get("subject", ""), draft.get("body", ""), self._gmail_token(conn))
+            did = created.get("id", "")
+            conn.execute("UPDATE companies SET draft_id=?, durum='TASLAK', son_guncelleme=? WHERE id=?", (did, now_iso(), cid))
+            write_audit(conn, cid, "gmail_draft", None, did, "gmail"); conn.commit()
+        except Exception as e:
+            conn.close(); return self._json({"error": str(e)}, 400)
+        conn.close(); sync_csv(); self._json({"ok": True, "draft_id": did, "draft_url": gmail_draft_url(did)})
+
+    def api_gmail_check(self, cid):
+        conn = get_conn(); row = conn.execute("SELECT * FROM companies WHERE id=?", (cid,)).fetchone()
+        if not row: conn.close(); return self.send_error(404)
+        email = (row["eposta_veya_link"] or "").strip()
+        try: replies = gmail.find_replies(email, self._gmail_token(conn))
+        except Exception as e: conn.close(); return self._json({"error": str(e)}, 400)
+        if replies:
+            conn.execute("UPDATE companies SET last_reply_seen=?, durum='ADAY', son_guncelleme=? WHERE id=?", (now_iso(), now_iso(), cid))
+            conn.commit()
+        conn.close(); self._json({"ok": True, "reply_found": bool(replies), "count": len(replies)})
 
     # ---------- AI (BYOK) ----------
     def _company_and_profile(self, cid):

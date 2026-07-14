@@ -10,8 +10,10 @@ Anahtar asla koda gömülmez — ayarlar'dan (app_config) ya da ANTHROPIC_API_KE
 """
 import json
 import os
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
-MODEL = "claude-opus-4-8"
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
 try:
     import anthropic  # type: ignore
@@ -21,7 +23,7 @@ except ImportError:
 
 
 def available() -> bool:
-    return _SDK
+    return True
 
 
 def _client(api_key: str):
@@ -30,6 +32,27 @@ def _client(api_key: str):
     if not key:
         raise RuntimeError("Anthropic API anahtarı bağlı değil (Ayarlar'dan bağlayın).")
     return anthropic.Anthropic(api_key=key)
+
+
+def _message(api_key, system, user, max_tokens):
+    key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        raise RuntimeError("Anthropic API anahtarı bağlı değil (Ayarlar'dan bağlayın).")
+    if _SDK:
+        resp = anthropic.Anthropic(api_key=key).messages.create(
+            model=MODEL, max_tokens=max_tokens, system=system,
+            messages=[{"role": "user", "content": user}])
+        return "".join(b.text for b in resp.content if b.type == "text").strip()
+    payload = json.dumps({"model": MODEL, "max_tokens": max_tokens, "system": system,
+                          "messages": [{"role": "user", "content": user}]}).encode()
+    req = Request("https://api.anthropic.com/v1/messages", data=payload,
+                  headers={"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"})
+    try:
+        with urlopen(req, timeout=40) as response:
+            data = json.load(response)
+    except HTTPError as e:
+        raise RuntimeError(f"Anthropic API ({e.code}): {e.read().decode(errors='replace')[:300]}") from e
+    return "".join(x.get("text", "") for x in data.get("content", []) if x.get("type") == "text").strip()
 
 
 def _profile_context(profile: dict) -> str:
@@ -67,10 +90,7 @@ DRAFT_SYSTEM = (
 
 def generate_draft(company: dict, profile: dict, api_key: str = "") -> dict:
     """(ok, subject, body) — şirkete özel taslak."""
-    if not _SDK:
-        return {"ok": False, "error": "anthropic SDK kurulu değil (pip install anthropic)."}
     try:
-        client = _client(api_key)
         user = (
             f"Şirket: {company.get('firma','')}\n"
             f"Sektör: {company.get('sektor','')}\n"
@@ -80,14 +100,7 @@ def generate_draft(company: dict, profile: dict, api_key: str = "") -> dict:
             "Bu şirkete gönderilecek kısa bir outreach maili yaz. "
             "Yanıtı SADECE şu JSON formatında ver: {\"subject\": \"...\", \"body\": \"...\"}"
         )
-        resp = client.messages.create(
-            model=MODEL,
-            max_tokens=2000,
-            thinking={"type": "adaptive"},
-            system=DRAFT_SYSTEM,
-            messages=[{"role": "user", "content": user}],
-        )
-        text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        text = _message(api_key, DRAFT_SYSTEM, user, 2000)
         subject, body = _parse_subject_body(text)
         return {"ok": True, "subject": subject, "body": body}
     except Exception as e:  # noqa: BLE001 — kullanıcıya net hata döndür
@@ -102,24 +115,14 @@ MATCH_SYSTEM = (
 
 
 def match_project(company: dict, profile: dict, api_key: str = "") -> dict:
-    if not _SDK:
-        return {"ok": False, "error": "anthropic SDK kurulu değil (pip install anthropic)."}
     try:
-        client = _client(api_key)
         user = (
             f"Şirket: {company.get('firma','')}\nSektör: {company.get('sektor','')}\n\n"
             f"--- PROFİL ---\n{_profile_context(profile)}\n\n"
             "En uygun projeyi ve tek cümlelik gerekçesini ver. "
             "Yanıtı SADECE şu JSON ile: {\"proje\": \"...\", \"gerekce\": \"...\"}"
         )
-        resp = client.messages.create(
-            model=MODEL,
-            max_tokens=1000,
-            thinking={"type": "adaptive"},
-            system=MATCH_SYSTEM,
-            messages=[{"role": "user", "content": user}],
-        )
-        text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        text = _message(api_key, MATCH_SYSTEM, user, 1000)
         data = _extract_json(text) or {}
         return {"ok": True, "proje": data.get("proje", ""), "gerekce": data.get("gerekce", text)}
     except Exception as e:  # noqa: BLE001

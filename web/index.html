@@ -241,6 +241,8 @@
             <select id="setProvider" class="field"><option value="">(yok)</option><option value="serpapi">SerpAPI</option><option value="google">Google CSE</option><option value="bing">Bing</option></select></div>
           <div><label class="lbl">Arama API Key</label><input id="setSearch" class="field" type="password" placeholder="••••"></div>
         </div>
+        <label class="lbl" style="margin-top:12px">Google Search Engine ID (cx)</label>
+        <input id="setSearchCx" class="field" placeholder="Google CSE kullanıyorsan gerekli">
         <label class="switch" style="margin-top:14px"><input type="checkbox" id="setCaps"> Günlük taslak limiti aktif</label>
         <button class="btn" style="width:100%;margin-top:16px" onclick="saveKeys()">Anahtarları kaydet</button>
         <div class="ok" id="keysMsg"></div>
@@ -251,6 +253,19 @@
         <textarea id="setProfile" class="field code" rows="15" spellcheck="false"></textarea>
         <button class="btn btn-sub" style="width:100%;margin-top:14px" onclick="saveProfile()">Profili kaydet</button>
         <div class="ok" id="profMsg"></div>
+      </div>
+      <div class="panel">
+        <p class="ph">Gmail bağlantısı <span class="aistate" id="gmailState"></span></p>
+        <p class="sub" style="margin:-6px 0 16px">Google Cloud'da Gmail API açık bir Web application OAuth istemcisi oluştur. Aşağıdaki dönüş adresini Authorized redirect URI olarak ekle.</p>
+        <label class="lbl">Authorized redirect URI</label>
+        <input id="gmailRedirect" class="field" readonly value="https://tarikdeveci.pythonanywhere.com/api/gmail/callback" style="margin-bottom:12px">
+        <label class="lbl">OAuth Client ID</label><input id="gmailClientId" class="field" style="margin-bottom:12px">
+        <label class="lbl">OAuth Client Secret</label><input id="gmailClientSecret" class="field" type="password" style="margin-bottom:14px">
+        <div style="display:flex;gap:8px">
+          <button class="btn" style="flex:1" onclick="saveGmailAndConnect()">Kaydet ve Google'a bağlan</button>
+          <button class="btn btn-ghost" id="gmailDisconnect" onclick="disconnectGmail()">Bağlantıyı kes</button>
+        </div>
+        <div class="ok" id="gmailMsg"></div>
       </div>
     </div>
   </section>
@@ -434,7 +449,10 @@ async function openDrawer(id){
     ${c.draft_url?`<a class="btn btn-sub btn-sm" href="${c.draft_url}" target="_blank" style="margin-bottom:12px">✉️ Gmail taslağını aç</a>`:''}
     ${c.is_personal?'':`<div style="display:flex;gap:8px;margin-bottom:12px">
       <button class="btn btn-sm" style="flex:1" onclick="aiDraft(${c.id})">✨ AI taslak üret</button>
-      <button class="btn btn-sub btn-sm" style="flex:1" onclick="aiMatch(${c.id})">🎯 Proje eşleştir</button></div>`}
+      <button class="btn btn-sub btn-sm" style="flex:1" onclick="aiMatch(${c.id})">🎯 Proje eşleştir</button></div>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button class="btn btn-sub btn-sm" style="flex:1" onclick="gmailDraft(${c.id})">✉ Gmail taslağı oluştur</button>
+      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="gmailCheck(${c.id})">Yanıt kontrol et</button></div>`}
     <div id="aiOut" class="aiout hidden"></div>
     <label class="lbl">Durum</label>
     <select id="dDurum" class="field" style="margin-bottom:14px">${META.statuses.map(s=>`<option value="${esc(s)}" ${s===c.durum?'selected':''}>${esc(statusLabel(s))}</option>`).join('')}</select>
@@ -460,6 +478,10 @@ async function aiDraft(id){aiBusy('✨ Claude taslak yazıyor…');const r=await
   $('#aiOut').textContent=r.ok?((r.subject?'Konu: '+r.subject+'\n\n':'')+r.body):'⚠️ '+(r.error||'Hata');}
 async function aiMatch(id){aiBusy('🎯 Eşleştiriliyor…');const r=await api('/company/'+id+'/match',{method:'POST'});
   $('#aiOut').textContent=r.ok?('Önerilen proje: '+(r.proje||'-')+'\n\n'+(r.gerekce||'')):'⚠️ '+(r.error||'Hata');}
+async function gmailDraft(id){aiBusy('Gmail taslağı hazırlanıyor…');const r=await api('/company/'+id+'/gmail-draft',{method:'POST'});
+  $('#aiOut').textContent=r.ok?'Taslak Gmail hesabında oluşturuldu.':'⚠️ '+(r.error||'Hata');if(r.ok&&r.draft_url)window.open(r.draft_url,'_blank');}
+async function gmailCheck(id){aiBusy('Gmail yanıtları kontrol ediliyor…');const r=await api('/company/'+id+'/gmail-check',{method:'POST'});
+  $('#aiOut').textContent=r.ok?(r.reply_found?`${r.count} yanıt bulundu; durum görüşme sürecine alındı.`:'Son 30 günde yanıt bulunamadı.'):'⚠️ '+(r.error||'Hata');}
 async function saveDrawer(id){
   await api('/company/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({durum:$('#dDurum').value,notlar:$('#dNot').value,is_personal:$('#dPersonal').checked})});
   await loadCompanies();closeDrawer();overview();
@@ -475,17 +497,31 @@ async function loadSettings(){
   $('#setProvider').value=s.search_provider||'';
   $('#setAnthropic').placeholder=s.anthropic_key_masked||(s.anthropic_env?'(ortam değişkeninden)':'sk-ant-…');
   $('#setSearch').placeholder=s.search_key_masked||'••••';
+  $('#setSearchCx').value=s.search_cx||'';
+  $('#gmailClientId').placeholder=s.gmail_client_masked||'Google OAuth Client ID';
+  $('#gmailState').textContent=s.gmail_connected?'· bağlı ✓':'· bağlı değil';
+  $('#gmailDisconnect').style.display=s.gmail_connected?'block':'none';
   $('#setCaps').checked=!!s.daily_caps_enabled;
   $('#aiState').textContent=s.ai_available?(SESSION.ai_connected?'· bağlı ✓':'· bağlı değil'):'· SDK yok';
   $('#setProfile').value=JSON.stringify(s.profile||{},null,2);
 }
 async function saveKeys(){
-  const body={search_provider:$('#setProvider').value,daily_caps_enabled:$('#setCaps').checked};
+  const body={search_provider:$('#setProvider').value,search_cx:$('#setSearchCx').value,daily_caps_enabled:$('#setCaps').checked};
   if($('#setAnthropic').value)body.anthropic_api_key=$('#setAnthropic').value;
   if($('#setSearch').value)body.search_api_key=$('#setSearch').value;
   await api('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   $('#keysMsg').textContent='Kaydedildi.';$('#setAnthropic').value='';$('#setSearch').value='';
   SESSION=await api('/session');loadSettings();setTimeout(()=>$('#keysMsg').textContent='',2500);
+}
+async function saveGmailAndConnect(){
+  const body={};
+  if($('#gmailClientId').value)body.gmail_client_id=$('#gmailClientId').value;
+  if($('#gmailClientSecret').value)body.gmail_client_secret=$('#gmailClientSecret').value;
+  if(Object.keys(body).length)await api('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  location.href='/api/gmail/connect';
+}
+async function disconnectGmail(){
+  await api('/gmail/disconnect',{method:'POST'});$('#gmailMsg').textContent='Gmail bağlantısı kaldırıldı.';loadSettings();
 }
 async function saveProfile(){
   let prof;const m=$('#profMsg');
