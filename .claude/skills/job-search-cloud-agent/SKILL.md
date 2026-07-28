@@ -40,15 +40,30 @@ Create a folder (any Drive `create_file` call with `mimeType: application/vnd.go
 - **Read**: search `parentId = 'FOLDER_ID' and title = 'state.json'`, take the result with the newest `createdTime` (ignore older ones — they're prior runs' leftovers).
 - **Write**: create a *new* file with the same title in the same folder. Don't try to delete the old one (no delete tool either) — the next run's "take the newest" logic handles it. This does mean the folder accumulates versions over time, which doubles as a crude audit trail; if that becomes noisy, that's a future cleanup problem, not a blocker now.
 
-## Broadening discovery beyond job boards
+## Broadening discovery: search company-first, not posting-first
 
-This is the part a plain "search Indeed" routine misses, and it's usually why the user asked for this skill in the first place: most people worth reaching out to at an early-stage company haven't posted a job listing anywhere yet. Build the routine's search step around at least these categories, adapting the region-specific ones to wherever the user is job-hunting:
+This is the single most important design decision in the routine, and getting it backwards is the difference between 8 drafts a day and zero. It's worth understanding *why* before writing the search step.
 
-- **Job boards**: Indeed (use a dedicated connector if one showed up in the `mcp_connections` check — faster and more precise than scraping); ATS boards directly via `site:jobs.lever.co`, `site:boards.greenhouse.io`, `site:jobs.ashbyhq.com`, `site:apply.workable.com` searches.
-- **Startup directories (global)**: Y Combinator's company directory (ycombinator.com/companies, filtered to recent batches + "hiring"), Product Hunt's trending/launched section.
-- **Startup directories (regional)** — ask the user, or infer from their profile's `location` field, which local startup ecosystem to include. Examples: for Turkey, İTÜ Çekirdek's portfolio and Webrazzi's funding/startup news; other regions have their own equivalents (a local accelerator's portfolio page, a regional tech-news outlet's funding-roundup coverage). Don't hardcode a single country's sources into the routine prompt without asking — this list should match where the user is actually looking.
+`src/pipeline.py`'s `classify_contact` ranks a real ATS link above a generic email. That's correct — if a company has a live posting, applying through it beats cold-emailing. But it means any candidate that arrives with an ATS link becomes an `ATS_DIGEST` entry, which produces **no draft**. Drafts only happen for companies that have a verified generic email and *no* ATS posting.
 
-For each startup found this way, search for its careers page / ATS link the same way you would for a company found via a job board — the point isn't a different pipeline, just a wider net feeding the same `pipeline.py` filter.
+So the ordering of the search determines the output:
+
+- **Posting-first** (start at Indeed / ATS boards) surfaces established companies that already have listings — every one of them lands in `ATS_DIGEST`. A run built this way can scan 35 postings, do everything else right, and still produce zero drafts. It also burns time re-evaluating the same companies, because job boards return the same established employers day after day.
+- **Company-first** (start at accelerator portfolios, funding news, startup directories) surfaces growing companies that haven't posted anything yet. Those are exactly the ones where a speculative email to `info@` is the only way in — and exactly the ones that produce drafts.
+
+Build the routine so company-first discovery is the primary engine (most of the run's effort), with job-board scanning as a secondary pass that fills the `ATS_DIGEST` list. Give it an explicit numeric target ("find at least N new companies with verified emails, keep going until you hit it") — without a target, a run tends to stop after two or three finds and report that the market was quiet.
+
+**Sources to rotate through** (don't hit the same one daily — a single directory exhausts within days once the user has contacted everyone obvious in it):
+
+- **Global**: Y Combinator's full company directory (not just the last batch or two — it's thousands of companies, filter by "hiring" and remote), Work at a Startup, Product Hunt trending/recent launches, Wellfound remote listings.
+- **Funding news** — the highest-signal source, since a company that just raised is almost certainly hiring: regional tech press and funding roundups covering the last ~6 months.
+- **Regional/local ecosystem** — ask the user or infer from their profile's `location`: accelerator and incubator portfolios, university tech parks, national startup databases. Weight the user's own city first when they have one. (For Turkey that's İTÜ Çekirdek, Webrazzi, Startups.watch, the teknopark portfolios; every region has equivalents — don't hardcode one country's list without asking.)
+- **Remote-friendly global pools** — check the profile before narrowing geography. If it says the user is open to remote, restricting search to their home country throws away the largest pool available.
+- **Niche matched to the user's differentiators** — if the profile has an unusual credential or domain (a sustainability certification, a specific ML specialty), search that vertical directly. These searches have far less competition than generic "junior software engineer" queries.
+
+For each company found this way: check it against both the contacted and portal-only lists by *name* (not URL), then look for a generic email that genuinely appears on their site. Never let it guess an address pattern — an invented `info@` that bounces is worse than no draft.
+
+**A note on job-board deduplication**: some boards (Indeed notably) regenerate their redirect URLs on every search, so the same posting comes back with a fresh token each run. URL-based dedup silently fails against these. Dedup on company name + role title instead, or the routine will keep re-examining the same postings and burn its budget on work it already did.
 
 ## Building and creating the routine
 

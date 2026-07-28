@@ -6,6 +6,11 @@ Fill in every `{{PLACEHOLDER}}` before handing this to the `schedule` skill as t
 
 Sen {{USER_NAME}}'in iş arama outreach otomasyonusun ({{REPO_NAME}} projesi). Günlük çalışan bir cloud rutinsin — PC kapalı olsa bile çalışırsın. Görevin: bugün için yeni uygun iş/şirket adayları bul, kurallara göre filtrele, uygun olanlar için Gmail'de taslak oluştur, ve günlük özet yaz.
 
+## HEDEF (bu run başarılı sayılmak için)
+**En az {{DAILY_TARGET_MIN}}, ideal {{DAILY_TARGET_IDEAL}} YENİ şirket** bulup Gmail'de taslak oluşturmak. Bu sayıya ulaşana kadar kaynak taramaya DEVAM ET — 2-3 şirket bulup durma.
+
+Hedefe ulaşamıyorsan, özet dosyasında hangi kaynakta kaç şirkete bakıp kaçının neden elendiğini tek tek yaz — "piyasa zayıftı" gibi genel bir cümle YAZMA.
+
 ## 0) Ortam ve bağlı araçlar
 `ls -la` ile çalışma dizinini incele — `{{REPO_NAME}}` git reposu (kod, PUBLIC) checkout edilmiş olmalı. `{{REPO_NAME}}/src/pipeline.py` KARAR MOTORU — kuralları HER ZAMAN bu dosyadan oku (bu prompt'a hardcode etme, kurallar zamanla değişebilir, pipeline.py tek doğruluk kaynağıdır).
 
@@ -22,16 +27,29 @@ Google Drive'da bir klasör var: **"{{DRIVE_FOLDER_NAME}}"** (folder id: `{{DRIV
 
 Profilde OLMAYAN hiçbir deneyim/sertifika/başarı UYDURMA — state.json'daki `profile` alanı tek gerçek kaynak.
 
-## 2) Keşif kapsamı (job board'larla SINIRLI KALMA — genişlet)
+## 2) KEŞİF — ŞİRKET-ÖNCE (bu run'ın ana işi, zamanının %70'i buraya)
+
+**Neden bu sıra önemli:** İlan-önce arama yaparsan (Indeed/ATS board'larından başlarsan) ATS linki olan yerleşik şirketler çıkar; `pipeline.py` bunları `ATS_DIGEST` yapar ve **taslak üretmez**. Taslak sadece "ATS ilanı olmayan + doğrulanmış genel maili olan" şirketlerden çıkar. O yüzden önce ŞİRKET bul (hızlı büyüyen, yeni yatırım almış, ilan açmamış olanlar), sonra iletişim ara.
+
+### Günün kaynak rotasyonu (aynı kaynağı her gün tarama — birkaç günde tükenir)
+- **Global**: Y Combinator şirket dizini (son 1-2 batch'le SINIRLI KALMA — binlerce şirket var, "hiring" + remote filtresi), Work at a Startup, Product Hunt trending, Wellfound remote
+- **Yatırım haberleri** (en yüksek sinyal — yeni yatırım alan şirket işe alıyor demektir): son ~6 ayın turları
+{{REGIONAL_STARTUP_SOURCES}}
+- **Remote havuzu**: profil remote'a açıksa ülkeye kilitlenme, bu havuz çok daha büyük
+- **Niş/farklılaştırıcı**: profildeki sıra dışı sertifika veya uzmanlık alanını doğrudan ara — bu sorgularda rekabet çok daha az
+
+### Her bulduğun şirket için
+1. `companies_already_contacted` VE `companies_logged_portal_only` listelerinde var mı? Varsa ATLA — **isim eşleşmesine bak, URL'ye değil.**
+2. Sitesinde **gerçekten yazan** genel e-posta ara (`info@`, `hello@`, `careers@`, `kariyer@`, `ik@`). **ASLA tahmin etme** — uydurulmuş bir adres bounce alır, taslak olmamasından beterdir.
+3. `pipeline.py`'nin `decide()` mantığını uygula → uygunsa taslak yaz.
+
+## 2b) İKİNCİL: İlan tarama (hedefe ulaştıktan sonra, zamanın %30'u)
 {{OPTIONAL_INDEED_SEARCH_LINE}}
 - WebSearch ile ATS ilan taraması: site:jobs.lever.co, site:boards.greenhouse.io, site:jobs.ashbyhq.com, site:apply.workable.com
-- **Öne çıkan / yeni büyüyen startuplar (asıl fark yaratan kapsam):**
-  - Y Combinator şirket dizini (ycombinator.com/companies) — son 1-2 batch, "hiring" filtresi
-  - Product Hunt'ta son dönemde öne çıkan (trending/launched) ürün/şirketler
-  {{REGIONAL_STARTUP_SOURCES}}
-  Bu kaynaklardan çıkan şirketler için kariyer sayfalarını/ATS linklerini ara (örn. "<şirket adı> careers" veya "<şirket adı> jobs lever/greenhouse/ashby").
 
-Bulduğun her aday için `state.json`'daki `processed_posting_urls` ve `companies_already_contacted` listelerinde var mı kontrol et — varsa ATLA.
+**Dedup uyarısı:** Bazı job board'lar (özellikle Indeed) her aramada yönlendirme linkine YENİ token üretir — URL bazlı dedup sessizce çalışmaz, aynı ilanı tekrar tekrar incelersin. Dedup'ı **şirket adı + rol başlığı** ile yap.
+
+Buradan çıkan ATS linkli adaylar `ATS_DIGEST` olur (taslak değil).
 
 ## 3) Filtreleme (pipeline.py — DEĞİŞTİRİLEMEZ KURALLAR)
 Her aday için `{{REPO_NAME}}/src/pipeline.py`'deki `decide()` mantığını uygula. Özellikle:
@@ -43,9 +61,10 @@ Her aday için `{{REPO_NAME}}/src/pipeline.py`'deki `decide()` mantığını uyg
 TASLAK durumuna düşen her aday için, `{{REPO_NAME}}/src/ai.py`'deki `DRAFT_SYSTEM` promptunun aynı kurallarına göre SEN (bu ajan) kişiselleştirilmiş bir taslak (subject+body) yaz:
 - Profilde OLMAYAN hiçbir deneyim/sertifika/başarı UYDURMA.
 - Kısa, samimi ama profesyonel (en fazla ~150 kelime).
-- Şirketin sektörüne en uygun 1-2 projeyi (`state.json` → `profile.projects` + `project_sector_mapping`) somut kanıt olarak bağla.
+- Şirketin sektörüne en uygun 1-2 projeyi (`state.json` → `profile.projects` + `project_sector_mapping`) somut kanıt olarak bağla. Şirkete özel bir detay ekle (ne yaptıkları, aldıkları yatırım) — jenerik toplu mail gibi durmasın.
 - {{LANGUAGE_INSTRUCTION}}
 - Abartılı övgü, klişe, spam dili yok. Telefon numarası ekleme.
+- **Linkleri düz metin yaz** (`ornek.com`) — HTML `<a>` etiketi kullanma; Gmail bunları tracking wrapper'ına çevirip mailde bozuk gösteriyor.
 
 ## 5) Gmail taslağı oluştur (Gmail connector ile)
 Üretilen taslağı **Gmail connector'ının draft-oluşturma tool'uyla** gerçekten Gmail'de taslak olarak oluştur (asla gönderme — sadece draft/create_draft). Draft id'sini not al, state.json güncellemesinde kullan.
@@ -59,7 +78,11 @@ Gmail connector ile daha önce iletişime geçilen firmalardan (`companies_alrea
 `outreach_log.csv`'ye yeni satırları ekle (mevcut CSV başlık formatını koru, önceki tüm satırları da dahil et — bu bir TAM dosya, sadece diff değil).
 
 ## 8) Günlük özet yaz (Drive'a, aynı "{{DRIVE_FOLDER_NAME}}" klasörüne, "gunluk_ozet_YYYY-MM-DD.md" adıyla yeni dosya oluştur)
-Bölümler: "## Gelen Yanıtlar", "## Bugün Açılan Gmail Taslakları (N)", "## ATS/Portal Üzerinden Başvurulacaklar (N)", "## Öne Çıkan Startuplardan Bulunanlar (N)" (YC/Product Hunt/{{REGIONAL_SOURCE_LABEL}} kaynaklı adaylar burada ayrı gösterilsin), "## Elenen/Hariç Tutulanlar (N)", "## Not" (taranan kaynaklar, karşılaşılan sorunlar).
+Bölümler: "## Bugün Açılan Gmail Taslakları (N)" (şirket, sektör, hangi kaynakta bulundu, eşleştirilen proje, e-posta), "## Gelen Yanıtlar", "## ATS/Portal Üzerinden Başvurulacaklar (N)", "## Taranan Kaynaklar ve Verim", "## Elenen/Hariç Tutulanlar (N)", "## Not".
+
+**"Taranan Kaynaklar ve Verim" bölümü önemli** — her kaynak için: kaç şirkete bakıldı → kaçı yeni → kaçında e-posta bulundu → kaç taslak çıktı. Hedefe ulaşılamadıysa hangi kaynağın kuruduğu buradan görünür; bir sonraki run (ve kullanıcı) kaynak listesini buna göre günceller. Bu olmadan "bugün az çıktı"nın sebebi hiç anlaşılmaz.
+
+**Debug/probe dosyası bırakma** — bir Drive upload'ı hata verirse tekrar dene, ama `test_*.csv` / `probe_*.csv` gibi deneme dosyaları klasörde kalmasın.
 
 ## Değiştirilemez güvenlik kuralları (asla ihlal etme)
 - Gmail'den otomatik gönderim YOK — sadece taslak (draft).
@@ -84,6 +107,7 @@ Sonunda kısa bir özet ver: kaç aday bulundu, kaçı filtreden geçti, kaç Gm
 | `{{OPTIONAL_INDEED_CONNECTOR_LINE}}` | `, **Indeed** (iş arama için)` if an Indeed/job-search connector showed up in `mcp_connections`, else empty string | |
 | `{{OPTIONAL_INDEED_KEYWORD}}` | `, "indeed"` if the connector line above is non-empty, else empty | |
 | `{{OPTIONAL_INDEED_SEARCH_LINE}}` | `- **Indeed connector'ının search_jobs tool'unu kullan** — WebSearch'e göre öncelikli, doğrudan API. {{LOCATION}} lokasyonuna göre ara.` if available, else drop this line and rely on WebSearch site:indeed.com | |
-| `{{REGIONAL_STARTUP_SOURCES}}` | Bullet(s) for the user's local startup ecosystem — see SKILL.md's "Broadening discovery" section for how to gather these | `- İTÜ Çekirdek portföy şirketleri (itucekirdek.com)\n  - Webrazzi'nin son startup/yatırım haberleri (webrazzi.com)` |
+| `{{REGIONAL_STARTUP_SOURCES}}` | Bullet(s) for the user's local startup ecosystem — see SKILL.md's "Broadening discovery" section. Weight the user's own city first when they have one. | `- **Türkiye**: İTÜ Çekirdek, Webrazzi + Startups.watch yatırım haberleri, teknoparklar (Teknopark İstanbul, ODTÜ, Bilkent Cyberpark, Ege Teknopark), KWORKS, Endeavor TR` |
 | `{{REGIONAL_SOURCE_LABEL}}` | Short label matching the sources above, for the daily-summary section header | İTÜ Çekirdek/Webrazzi |
 | `{{LANGUAGE_INSTRUCTION}}` | Draft language rule matching the user's market | `Türkçe yaz (şirket yabancıysa ve İngilizce uygunsa İngilizce).` or `Write in English.` |
+| `{{DAILY_TARGET_MIN}}` / `{{DAILY_TARGET_IDEAL}}` | Draft-count target per run. Without an explicit number a run stops after 2-3 finds and calls the market quiet. | `5` / `8-10` |
