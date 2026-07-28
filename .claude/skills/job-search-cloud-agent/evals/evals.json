@@ -1,0 +1,29 @@
+{
+  "skill_name": "job-search-cloud-agent",
+  "evals": [
+    {
+      "id": 1,
+      "name": "berlin-happy-path",
+      "prompt": "I forked tarikdeveci/outreachos to run my own job search. I already filled in my own state.json locally (profile: Lukas Weber, Backend/AI Engineer, based in Berlin, open to remote EU roles). I want the daily search to run in the cloud even when my laptop is off, and since I'm in Berlin I'd like it to also check local startup directories/accelerators (not just the US-centric YC list) if you can find good ones for the German startup scene. Can you set this up?",
+      "expected_output": "Agent gathers/confirms a synthetic profile (without touching the real local state.json), confirms the repo URL, checks which MCP connectors are actually available via a throwaway disabled RemoteTrigger call, avoids the private-repo-as-data-store pitfall, seeds a Drive folder (skilltest-1- prefixed) with synthetic state.json + outreach_log.csv, asks about or researches real Berlin-relevant startup sources instead of reusing Turkish ones, builds the routine prompt from the template, hands off to the schedule skill to create a disabled test routine, and reports back links plus explicit reassurance the routine doesn't depend on the user's machine.",
+      "files": [],
+      "assertions": ["avoided_private_repo_pitfall", "used_google_drive_for_state", "prefixed_test_resources", "did_not_modify_real_repo_files", "region_appropriate_startup_sources", "explains_pc_independence", "routine_created_disabled"]
+    },
+    {
+      "id": 2,
+      "name": "turkish-reproduction",
+      "prompt": "iş arama sistemimi buluta taşı, PC kapalıyken de çalışsın istiyorum. Ayrıca sadece Indeed'den değil, öne çıkan startuplardan da (YC, İTÜ Çekirdek gibi) fırsat bulmasını istiyorum. Her sabah 9'da çalışsın.",
+      "expected_output": "Agent reproduces essentially the same setup already built manually for this exact repo/user: correct region inference (Turkey) from the Turkish phrasing and explicit İTÜ Çekirdek mention, Indeed connector usage if available, YC + İTÜ Çekirdek (and ideally Webrazzi) as regional sources, 09:00 Europe/Istanbul cron converted correctly to UTC, Drive-based persistence (not private repo), disabled skilltest-2- prefixed test routine, clear final summary in Turkish matching the user's language.",
+      "files": [],
+      "assertions": ["avoided_private_repo_pitfall", "used_google_drive_for_state", "prefixed_test_resources", "did_not_touch_real_production_resources", "correct_timezone_conversion", "includes_broadened_startup_discovery", "response_in_turkish", "routine_created_disabled"]
+    },
+    {
+      "id": 3,
+      "name": "missing-drive-connector",
+      "prompt": "Can you set up the automated daily job-search cloud agent from this repo for me? Heads up, I don't think I've ever connected Google Drive to Claude before, not totally sure what that even means.",
+      "expected_output": "This is a decision-path test, not a resource-creation test — the account actually has Drive connected already, so the agent must roleplay/treat this scenario as if Drive were unavailable rather than relying on the real connector check. Expected: the agent recognizes the missing-connector blocker, explains what Drive is and why it's needed in plain terms (user signaled unfamiliarity), points to https://claude.ai/customize/connectors, and stops there — it should NOT fabricate a working Drive folder, NOT silently fall back to the private-repo approach, and NOT create any real GitHub/Drive/routine resources for this eval.",
+      "files": [],
+      "assertions": ["detects_missing_connector_blocker", "no_real_resources_created", "explains_in_plain_terms", "points_to_correct_url", "does_not_fallback_to_private_repo"]
+    }
+  ]
+}

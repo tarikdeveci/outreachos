@@ -18,3 +18,7 @@ venv/
 # --- OS ---
 .DS_Store
 Thumbs.db
+
+# --- Claude Code local settings & eval scratch (not for public repo) ---
+.claude/settings.local.json
+.claude/skills/job-search-cloud-agent-workspace/
