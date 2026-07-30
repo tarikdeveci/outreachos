@@ -97,13 +97,13 @@ Windows PowerShell: `$env:SEARCH_API_KEY="..."`
 
 > Anahtar yoksa keşif atlanır; dashboard ve mevcut 67 şirket sorunsuz çalışır.
 
-### 6b. Gmail API (taslak oluşturma + yanıt takibi)
-**Otomatik GÖNDERİM YOKTUR** — yalnızca `drafts.create`. Gönderme kararı her zaman sende.
+### 6b. Gmail API (taslak oluşturma + yanıt takibi + kendine rapor)
+Şirketlere **otomatik gönderim YOKTUR** — şirket outreach'i yalnızca `drafts.create` (taslak), gönderme kararı her zaman sende. Tek istisna: günlük özet **senin kendi adresine** rapor olarak gönderilir (`gmail.send`, hedef bağlı hesabın kendi adresi değilse reddedilir).
 
 1. [Google Cloud Console](https://console.cloud.google.com/) → yeni proje → **Gmail API**'yi etkinleştir.
 2. **OAuth consent screen** → External → kendi Gmail'ini test kullanıcısı ekle.
 3. **Credentials → OAuth client ID → Desktop app** → `credentials.json` indir, proje köküne koy.
-4. Kapsam (scope): `https://www.googleapis.com/auth/gmail.compose` (taslak) + `gmail.readonly` (yanıt takibi).
+4. Kapsam (scope): `gmail.compose` (taslak) + `gmail.readonly` (yanıt takibi) + `gmail.send` (yalnızca kendine günlük rapor). Daha önce bağladıysan send yeni scope olduğu için Gmail'i **yeniden bağla**.
 5. İlk çalıştırmada tarayıcıda onay verirsin; token `token.json`'a kaydolur.
 
 > `credentials.json` ve `token.json` **asla commit edilmez** (gizli). CAPTCHA'lı formlar otomatik geçilmez — sana bırakılır.
@@ -112,7 +112,7 @@ Windows PowerShell: `$env:SEARCH_API_KEY="..."`
 
 ## 7. Güvenlik Kuralları (değiştirilemez)
 
-- ❌ Gmail'den otomatik **gönderim yok** — sadece taslak.
+- ❌ **Şirketlere** otomatik gönderim yok — outreach sadece taslak. ✅ Tek istisna: günlük rapor yalnızca **senin kendi adresine** gider (`send_self_report`, dış adrese asla).
 - ❌ CAPTCHA otomatik geçilmez.
 - ❌ Kişisel tanıdık şirketleri (`excluded_companies_seed_personal`) pipeline'a girmez — Kişisel/Bekleyen sekmesinde manuel karar bekler.
 - ✅ `daily_caps` config'den açılıp kapanabilir; varsayılan **açık** (Genel Bakış'taki "aktif" anahtarı).

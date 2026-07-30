@@ -11,7 +11,12 @@ from urllib.request import Request, urlopen
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
-SCOPES = "https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.readonly"
+# gmail.compose (taslak) + gmail.readonly (yanıt/bounce takibi) + gmail.send.
+# ÖNEMLİ: gmail.send YALNIZCA kullanıcının kendi adresine günlük rapor yollamak için
+# eklendi — şirketlere otomatik gönderim ASLA yapılmaz (send_self_report tek çağrı yeri).
+SCOPES = ("https://www.googleapis.com/auth/gmail.compose "
+          "https://www.googleapis.com/auth/gmail.send "
+          "https://www.googleapis.com/auth/gmail.readonly")
 _states = {}
 
 
@@ -80,3 +85,22 @@ def create_draft(to, subject, body, token):
 def find_replies(email, token):
     query = urlencode({"q": f"from:({email}) newer_than:30d", "maxResults": 10})
     return _api("GET", "/messages?" + query, token).get("messages", [])
+
+
+def get_profile_email(token):
+    """Bağlı Gmail hesabının kendi adresi — self-report'un nereye gideceğini belirler."""
+    return _api("GET", "/profile", token).get("emailAddress", "")
+
+
+def send_self_report(to, subject, body, token):
+    """Günlük raporu KULLANICININ KENDİ adresine yollar. `to`, bağlı hesabın kendi
+    adresi olmalı; farklıysa gönderim reddedilir (yanlışlıkla dışarı mail atmayı önler)."""
+    own = (get_profile_email(token) or "").lower()
+    if not own or to.lower() != own:
+        raise RuntimeError(f"send_self_report yalnızca kendi adresine gönderir "
+                           f"(bağlı hesap: {own or 'bilinmiyor'}, istenen: {to}).")
+    msg = EmailMessage()
+    msg["To"], msg["Subject"] = to, subject
+    msg.set_content(body)
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
+    return _api("POST", "/messages/send", token, {"raw": raw})

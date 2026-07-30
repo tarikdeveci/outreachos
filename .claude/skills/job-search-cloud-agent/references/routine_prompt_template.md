@@ -65,6 +65,7 @@ TASLAK durumuna düşen her aday için, `{{REPO_NAME}}/src/ai.py`'deki `DRAFT_SY
 - {{LANGUAGE_INSTRUCTION}}
 - Abartılı övgü, klişe, spam dili yok. Telefon numarası ekleme.
 - **Linkleri düz metin yaz** (`ornek.com`) — HTML `<a>` etiketi kullanma; Gmail bunları tracking wrapper'ına çevirip mailde bozuk gösteriyor.
+- Her aday için ayrıca: (a) 0-100 **uygunluk skoru** + tek cümlelik gerekçe (profil-şirket örtüşmesi; 85+ çok güçlü), (b) LinkedIn'de mesaj atılacak 1-3 **ROL ünvanı** (Head of AI, Engineering Manager, Technical Recruiter gibi — **GERÇEK KİŞİ ADI/E-POSTA UYDURMA, sadece rol**), (c) LinkedIn için 1-2 cümlelik kısa bağlantı notu. Bunlar günlük özete ve self-report'a girer. LinkedIn'de profil TARAMA, otomatik bağlantı/mesaj GÖNDERME — kişiyi bulup mesajı yollamak kullanıcıya bırakılır.
 
 ## 5) Gmail taslağı oluştur (Gmail connector ile)
 Üretilen taslağı **Gmail connector'ının draft-oluşturma tool'uyla** gerçekten Gmail'de taslak olarak oluştur (asla gönderme — sadece draft/create_draft). Draft id'sini not al, state.json güncellemesinde kullan.
@@ -78,14 +79,21 @@ Gmail connector ile daha önce iletişime geçilen firmalardan (`companies_alrea
 `outreach_log.csv`'ye yeni satırları ekle (mevcut CSV başlık formatını koru, önceki tüm satırları da dahil et — bu bir TAM dosya, sadece diff değil).
 
 ## 8) Günlük özet yaz (Drive'a, aynı "{{DRIVE_FOLDER_NAME}}" klasörüne, "gunluk_ozet_YYYY-MM-DD.md" adıyla yeni dosya oluştur)
-Bölümler: "## Bugün Açılan Gmail Taslakları (N)" (şirket, sektör, hangi kaynakta bulundu, eşleştirilen proje, e-posta), "## Gelen Yanıtlar", "## ATS/Portal Üzerinden Başvurulacaklar (N)", "## Taranan Kaynaklar ve Verim", "## Elenen/Hariç Tutulanlar (N)", "## Not".
+Bölümler: "## Bugün Açılan Gmail Taslakları (N)" (şirket, **%uygunluk skoru**, sektör, hangi kaynakta bulundu, eşleştirilen proje, e-posta, **LinkedIn hedef roller**), "## Gelen Yanıtlar", "## ATS/Portal Üzerinden Başvurulacaklar (N)" (şirket, rol, ilan linki — SEN başvuracaksın), "## Taranan Kaynaklar ve Verim", "## Elenen/Hariç Tutulanlar (N)", "## Not".
 
 **"Taranan Kaynaklar ve Verim" bölümü önemli** — her kaynak için: kaç şirkete bakıldı → kaçı yeni → kaçında e-posta bulundu → kaç taslak çıktı. Hedefe ulaşılamadıysa hangi kaynağın kuruduğu buradan görünür; bir sonraki run (ve kullanıcı) kaynak listesini buna göre günceller. Bu olmadan "bugün az çıktı"nın sebebi hiç anlaşılmaz.
 
 **Debug/probe dosyası bırakma** — bir Drive upload'ı hata verirse tekrar dene, ama `test_*.csv` / `probe_*.csv` gibi deneme dosyaları klasörde kalmasın.
 
+## 8b) Günlük raporu {{USER_NAME}}'e KENDİ mailinden ilet
+Yukarıdaki özeti — özellikle **"ATS/Portal Üzerinden Başvurulacaklar" listesi** (SEN başvuracaksın) ve **skorlu/hedef-rollü taslak listesi** — {{USER_NAME}}'in KENDİ Gmail adresine ilet:
+- Elindeki Gmail connector'ında **gönderme (send) tool'u varsa**, raporu düz-metin olarak KENDİ adresine gönder (konu: `İş arama raporu YYYY-MM-DD: N taslak, M ATS`).
+- **Yoksa (connector sadece draft açabiliyorsa)**, aynı içerikle KENDİ adresine bir **Gmail taslağı** oluştur — böylece kullanıcı Gmail'de görür. Bunu özet dosyasında "rapor: gönderildi / taslak olarak bırakıldı" diye not düş.
+- Bu, "kendine rapor" tek istisnasıdır; **şirketlere ASLA gönderme** — onlar sadece taslak kalır.
+
 ## Değiştirilemez güvenlik kuralları (asla ihlal etme)
-- Gmail'den otomatik gönderim YOK — sadece taslak (draft).
+- ŞİRKETLERE otomatik gönderim YOK — şirket outreach'i her zaman sadece taslak (draft). Tek istisna: günlük raporu KULLANICININ KENDİ adresine iletmek (adım 8b) — o da yalnızca kullanıcının kendi adresine.
+- LinkedIn'de profil TARAMA, otomatik bağlantı isteği/mesaj GÖNDERME, CAPTCHA geçme YOK — sadece hedef ROL öner, kişiyi bulup mesajı yollamak kullanıcıya kalır.
 - CAPTCHA otomatik geçilmez.
 - Kişisel tanıdık şirketleri (excluded_companies_seed_personal) ve excluded_sectors pipeline'a hiç girmez.
 - Kişiye özel (isim.soyisim@) email adresi ASLA tahmin edilmez/uydurulmaz.

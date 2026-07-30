@@ -150,28 +150,59 @@ def classify_contact(candidate: dict):
     return None, None, "ELENEN_EPOSTA_BULUNAMADI"
 
 
+# ---------- skor: 0-100 kaba uygunluk (deterministik; LLM skoru varsa o önceliklidir) ----------
+JUNIOR_SIGNALS = ["junior", "jr.", "jr ", "intern", "staj", "associate", "entry",
+                  "new grad", "yeni mezun", "graduate", "başlangıç"]
+
+
+def score_fit(candidate: dict, profile=None, kanal: str | None = None) -> int:
+    """Şirket+rol+iletişim sinyallerinden 45-100 arası kaba bir eşleşme skoru.
+    Kesin karar değil, sıralama içindir; LLM `uygunluk_skoru` varsa rapor onu gösterir."""
+    profile = profile or load_profile()
+    title = f" {(candidate.get('title') or '').lower()} "
+    score = 45
+    cats = profile.get("role_filters", {}).get("role_categories_include", {})
+    if any(kw.lower().strip() and kw.lower().strip() in title
+           for kws in cats.values() for kw in kws):
+        score += 25
+    if any(j in title for j in JUNIOR_SIGNALS):
+        score += 10
+    if kanal == "ats":
+        score += 15
+    elif kanal in ("gmail_draft", "career_form"):
+        score += 8
+    sektor = (candidate.get("sektor") or "").lower()
+    mapping = {k.lower(): v for k, v in (profile.get("project_sector_mapping", {}) or {}).items()}
+    if sektor and any(tok in sektor for tok in mapping):
+        score += 7
+    return max(0, min(100, score))
+
+
 # ---------- 4) tam karar ----------
 def decide(candidate: dict):
     """
     candidate: {firma, title, sektor, link, email, email_verified}
-    -> {include, durum, kanal, deger, reasons[]}
+    -> {include, durum, kanal, deger, skor, reasons[]}
     """
     reasons = []
     ok, why, st = sector_filter(candidate.get("firma", ""), candidate.get("sektor", ""))
     reasons.append(why)
     if not ok:
-        return {"include": False, "durum": st, "kanal": "elendi", "deger": None, "reasons": reasons}
+        return {"include": False, "durum": st, "kanal": "elendi", "deger": None,
+                "skor": 0, "reasons": reasons}
 
     ok, why, st = role_filter(candidate.get("title", ""))
     reasons.append(why)
     if not ok:
-        return {"include": False, "durum": st, "kanal": "elendi", "deger": None, "reasons": reasons}
+        return {"include": False, "durum": st, "kanal": "elendi", "deger": None,
+                "skor": 0, "reasons": reasons}
 
     kanal, deger, durum = classify_contact(candidate)
     reasons.append(f"iletişim: {kanal or 'bulunamadı'}")
     include = durum not in ("ELENEN_EPOSTA_BULUNAMADI",)
+    skor = score_fit(candidate, kanal=kanal) if include else 0
     return {"include": include, "durum": durum, "kanal": kanal or "elendi",
-            "deger": deger, "reasons": reasons}
+            "deger": deger, "skor": skor, "reasons": reasons}
 
 
 def already_processed(url: str, firma: str, state=None):
