@@ -1,4 +1,7 @@
 # --- Kişisel veri & sırlar (ASLA commit edilmez) ---
+# Private veri reposu bu klasörün içine klonlanıyor (profil, CV, state, loglar).
+# Bir `git add .` bunu PUBLIC repoya taşımasın diye tamamen dışlanır.
+outreachos-data/
 tracker.db
 state.json
 outreach_log.csv

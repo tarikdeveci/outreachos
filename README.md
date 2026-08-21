@@ -1,7 +1,25 @@
-# İş Arama Otomasyon Dashboard
+# outreachos — İş Arama Otomasyonu
 
-Tarık Deveci'nin iş arama outreach sistemini **yerel, tek-kullanıcılı bir dashboard + karar motoruna** dönüştürür.
-Sıfır bağımlılık — sadece **Python 3** (stdlib) gerekir. `npm install` / `pip install` yok.
+Her sabah tek başına çalışan bir iş-arama / soğuk outreach sistemi: şirket keşfeder, eler,
+e-postayı doğrular, kişiselleştirilmiş bir mail **taslağı** yazar, uydurma iddia içerip
+içermediğini denetler ve sana günlük rapor yollar. Bilgisayarın kapalıyken de çalışır
+(GitHub Actions cron). Artı: yerel, tek-kullanıcılı bir **dashboard + karar motoru**.
+
+Sıfır bağımlılık — sadece **Python 3** (stdlib). `npm install` / `pip install` yok.
+
+> 📐 **Mimarinin tamamı ve "kendin nasıl yaparsın" rehberi: [ARCHITECTURE.md](ARCHITECTURE.md)**
+> Tasarım kararları, düşülen çukurlar, bounce guard matematiği, LLM denetim katmanı ve
+> adım adım kurulum sırası orada.
+
+**Öne çıkan tasarım kararları** (ayrıntı: ARCHITECTURE.md)
+- **Şirketlere otomatik mail yok** — outreach taslakta kalır, gönderme kararı insanda.
+- **Üç ayrı LLM adımı** (ele → yaz → *bağımsız* denetle) + deterministik sayı kontrolü;
+  tek çağrıya "yaz ve kendini denetle" demek çalışmıyor.
+- **E-posta tahmin edilmez** — adres sitede birebir geçmeli **ve** MX doğrulanmalı.
+- **Teslim edilebilirlik guard'ı** — bounce oranı ölçülür; %6'yı aşarsa veya bekleyen
+  taslak 12'yi geçerse yeni outreach otomatik durur.
+- **Bekleyen taslak triyajı** — her run mükerrer + içerik denetimi yapıp "gönder / sil /
+  düzelt" listesi çıkarır.
 
 Tek doğruluk kaynağı: `tracker.db` (SQLite). `outreach_log.csv` insan-okunur yedek olarak otomatik senkronlanır.
 
@@ -113,12 +131,47 @@ Windows PowerShell: `$env:SEARCH_API_KEY="..."`
 ## 7. Güvenlik Kuralları (değiştirilemez)
 
 - ❌ **Şirketlere** otomatik gönderim yok — outreach sadece taslak. ✅ Tek istisna: günlük rapor yalnızca **senin kendi adresine** gider (`send_self_report`, dış adrese asla).
-- ❌ CAPTCHA otomatik geçilmez.
+- ❌ CAPTCHA otomatik geçilmez; LinkedIn'de otomatik mesaj atılmaz (hazır arama linki verilir, mesajı sen atarsın).
 - ❌ Kişisel tanıdık şirketleri (`excluded_companies_seed_personal`) pipeline'a girmez — Kişisel/Bekleyen sekmesinde manuel karar bekler.
 - ✅ `daily_caps` config'den açılıp kapanabilir; varsayılan **açık** (Genel Bakış'taki "aktif" anahtarı).
+- ✅ Şüphedeyken durmak varsayılandır: doğrulama yapılamadıysa taslak "temiz" sayılmaz.
 
 ---
 
-## 8. Migration'ı Tekrar Çalıştırma
+## 8. Teslim Edilebilirlik (Deliverability) Katmanı
+
+Soğuk mail atan her sistemin çarptığı duvar: bounce oranı yükselir, mailler spam'e düşer.
+Sistem bunu **ölçer ve kendini frenler** (matematiği ve gerekçesi: [ARCHITECTURE.md](ARCHITECTURE.md) §5).
+
+| Durum | Hard-bounce (son 30g) | Davranış |
+|---|---|---|
+| 🟢 İYİ | < %3 | normal |
+| 🟡 İZLEME | %3–6 | rapora uyarı + trend |
+| 🔴 KRİTİK | ≥ %6 | **yeni outreach durur** (takip/rapor devam eder) |
+
+Ek fren: **bekleyen taslak > 12 ise yeni taslak üretilmez** — önce backlog boşalsın
+(biriken taslak hem boşuna LLM parası hem de bir gün topluca gönderilirse spam sinyali).
+
+Bounce alan adres `email_dead` işaretlenir, o domain bir daha denenmez. Küçük örneklemde
+(12 gönderimden az) fren devreye girmez; Gmail okunamazsa "ölçülemedi" olur ve **fren
+uygulanmaz** (fail-open).
+
+**Bekleyen taslak triyajı:** her run taslakları ✅ gönder / 🔁 sil (mükerrer) / ⚠️ düzelt /
+👀 elle bak diye etiketleyip rapora yazar. Kararlar gövde hash'iyle cache'lenir.
+
+**Opsiyonel — veto pencereli otomatik gönderim** (`AUTO_SEND=1`, varsayılan **kapalı**):
+denetimden ✅ geçen taslak bir gün kuyrukta bekler, raporda listelenir; **istemediğini
+Gmail'den silersen gitmez**. Gönderimden hemen önce MX yeniden doğrulanır ve günlük
+sert tavan (varsayılan 5) uygulanır.
+
+Bütün guard modülleri ağsız self-test içerir:
+
+```bash
+python scripts/deliverability.py && python scripts/audit_drafts.py && python scripts/autosend.py
+```
+
+---
+
+## 9. Migration'ı Tekrar Çalıştırma
 
 `migrate.py` idempotenttir: tekrar çalıştırınca CSV'den yeni satırları ekler, mevcutları günceller ama **senin dashboard'da girdiğin notları/durumları KORUR**. Sıfırdan kurmak için: `python src/migrate.py --force`.
