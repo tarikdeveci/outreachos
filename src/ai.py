@@ -1,6 +1,6 @@
 """
 AI modülü — BYOK (Bring Your Own Key) Anthropic entegrasyonu.
-Kullanıcı kendi API anahtarını bağlar; bu modül Claude'a (claude-opus-4-8) gider:
+Kullanıcı kendi API anahtarını bağlar; bu modül Claude'a (varsayılan: claude-sonnet-5) gider:
   - generate_draft: şirkete özel outreach mail taslağı üretir (kullanıcının profiline göre)
   - match_project: şirket için en uygun projeyi + gerekçesini önerir
 
@@ -13,7 +13,9 @@ import os
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+# claude-sonnet-4-5 emekliye ayrıldı ve API'den HTTP 400 dönüyor; güncel karşılığı
+# claude-sonnet-5. Model ID'leri tarih ekisiz yazılır (claude-sonnet-5-20260219 DEĞİL).
+MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 
 try:
     import anthropic  # type: ignore
