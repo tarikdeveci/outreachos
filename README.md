@@ -106,11 +106,12 @@ Karar motoru anahtarsız çalışır. **Canlı keşif ve otomatik taslak oluştu
 Yeni şirket keşfi (İTÜ Çekirdek / Webrazzi / YC dizini taraması) bir arama API'si ister. Birini seç ve anahtarı ortam değişkenine koy:
 
 ```bash
-# seçeneklerden BİRİ:
-export SEARCH_PROVIDER=serpapi   && export SEARCH_API_KEY="..."   # SerpAPI
-export SEARCH_PROVIDER=google    && export SEARCH_API_KEY="..." && export SEARCH_CX="..."  # Google Custom Search
-export SEARCH_PROVIDER=bing      && export SEARCH_API_KEY="..."   # Bing Search
+export SEARCH_PROVIDER=serper && export SEARCH_API_KEY="..."   # Serper.dev (serper.dev/api-key)
 ```
+
+> Google Custom Search JSON API'yi **kullanma**: yeni müşterilere kapalı (her çağrı
+> 403 döner) ve 2027-01-01'de tamamen kapanıyor. Bing Search API de emekliye ayrıldı.
+> Bulut ajanı (`outreachos-data`) Serper kullanıyor; ayrıntı için `SETUP.md`.
 Windows PowerShell: `$env:SEARCH_API_KEY="..."`
 
 > Anahtar yoksa keşif atlanır; dashboard ve mevcut 67 şirket sorunsuz çalışır.

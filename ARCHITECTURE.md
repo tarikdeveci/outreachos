@@ -64,7 +64,7 @@ flowchart TD
 ```
 
 ### 3.1 Keşif
-Google Custom Search (kotası bitince DuckDuckGo'ya düşer) ile YC/accelerator dizinleri,
+Serper.dev üzerinden Google araması (anahtar yoksa/kota bitince DuckDuckGo'ya düşer) ile YC/accelerator dizinleri,
 "biz kimiz" sayfaları, iş ilanı sayfaları taranır. Çıktı: aday domain havuzu (~5800 domain).
 Havuz ayrı bir scriptle (`refresh_pool.py`) periyodik beslenir; günlük run havuzdan tüketir.
 
@@ -256,7 +256,7 @@ otomasyondan kötüdür.
 | Kalem | Aylık |
 |---|---|
 | GitHub Actions | 0 ₺ (public repo / ücretsiz kota) |
-| Google Custom Search | 0 ₺ (100 sorgu/gün ücretsiz; bitince DuckDuckGo) |
+| Serper.dev (arama) | 0 ₺ (2.500 sorgu hediye; ~400 sorgu/ay tüketimle aylarca yeter, sonrası kredi bazlı ücretli; bitince DuckDuckGo) |
 | Anthropic API | birkaç dolar (Haiku eleme + Sonnet yazma/denetleme) |
 
 Kritik seçim: eleme adımı **ucuz modelle** (çok çağrılır), yazma/denetleme **güçlü modelle**
