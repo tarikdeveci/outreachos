@@ -1,0 +1,117 @@
+# ŞABLON — bunu KENDİ private veri reponuza `.github/workflows/daily.yml` olarak kopyalayın.
+#
+# Ayrım şu: bu repo (public) kodu tutar, sizin veri reponuz (private) profilinizi,
+# CV'nizi ve loglarınızı tutar. Cron veri reposunda çalışır, kodu buradan klonlar ve
+# OUTREACHOS_DATA_DIR ile koda veriyi nerede bulacağını söyler.
+#
+# Değiştirmeniz gerekenler:
+#   - `repository:` → bu repoyu fork ettiyseniz kendi fork'unuz
+#   - secrets → kendi veri reponuzda tanımlayın (SETUP.md)
+#
+name: Günlük iş arama taraması
+
+on:
+  schedule:
+    - cron: "0 5 * * *"        # 05:00 UTC = 08:00 Europe/Istanbul
+  workflow_dispatch:            # elle de çalıştırılabilsin
+    inputs:
+      dry_run:
+        description: "Taslak oluşturmadan sadece dene"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write               # state.json/log'u geri commit'lemek için
+  issues: write                 # günlük özeti issue olarak açmak için (GitHub mail atar)
+
+concurrency:
+  group: daily-search           # aynı anda iki run state'i ezmesin
+  cancel-in-progress: false
+
+jobs:
+  ara:
+    runs-on: ubuntu-latest
+    # 60 dk: script kendi 40 dk'lık bütçesinde durup sonucu yazıyor, bu tavan
+    # sadece takılma durumu için emniyet. 30 dk'da bir run kesildi ve o ana
+    # kadarki bütün iş kayboldu.
+    timeout-minutes: 60
+    steps:
+      - name: Veri reposunu çek
+        uses: actions/checkout@v4
+
+      - name: Motoru + karar motorunu çek (public kod reposu)
+        uses: actions/checkout@v4
+        with:
+          repository: tarikdeveci/outreachos      # fork ettiyseniz: <kullanici>/outreachos
+          path: _code
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Taramayı çalıştır
+        env:
+          # Motor public repoda (_code/scripts). Bu repo yalnizca veri tutar;
+          # kod veriyi tek bir seam uzerinden bulur: OUTREACHOS_DATA_DIR.
+          OUTREACHOS_DATA_DIR: ${{ github.workspace }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          DAILY_TARGET: "12"
+          BUDGET_SEC: "2700"      # 45 dk, workflow tavanı 60 dk
+          # Günde 12: Gmail itibarını korumak için bilinçli tavan. 30/gün soğuk
+          # mail + %13 bounce birleşince mailler spam'e düşmeye başlar; o noktada
+          # iyi yazılmış mailler bile ulaşmaz. 12/gün aynı aylık hacmi daha güvenli verir.
+          WORKERS: "6"
+          DELIVER_WINDOW_DAYS: "30"
+          BOUNCE_WATCH: "0.03"
+          BOUNCE_CRITICAL: "0.06"
+          DELIVER_MIN_SENT: "12"
+          MAX_PENDING_DRAFTS: "12"
+          AUDIT_MAX_VERIFY: "20"     # bekleyen taslak içerik-denetimi: run başına en fazla 20 yeni LLM
+          # Onaylı taslakların otomatik gönderimi. Zincir: audit ✅GUVENLI → 1 gün veto
+          # penceresi → bounce guard → MX kontrolü → gönder. "0" = kapalı (kod varsayılanı).
+          # 2026-09-06'da "1" yapıldı: kat 2026-08-21'den beri kuru çalıştı (16 run, hata yok,
+          # kuyruk 29→23 düştü = veto fiilen işledi), mail sağlığı 🟢 %0 bounce, gmail.send
+          # kapsamı self-report ile doğrulandı. Bekleyen 41 taslak yeni üretimi kilitliyordu;
+          # kat günde en fazla AUTO_SEND_CAP kadar göndererek backlog'u yavaşça boşaltır.
+          AUTO_SEND: "1"
+          AUTO_SEND_CAP: "5"         # günlük sert tavan (bounce/hacim koruması)
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        run: python _code/scripts/discover.py
+
+      # Push çakışması bir kez 30 taslağın kaydını uçurdu: run sürerken repoya
+      # başka bir commit girdi, push reddedildi, state.json commit'lenemedi ve
+      # o 30 şirket "iletişime geçilmedi" sanılıp ertesi gün tekrar işlenecekti.
+      # Bu adım artık asla sessizce kaybetmiyor: rebase + tekrar dene.
+      - name: Sonuçları commit'le
+        run: |
+          git config user.name "outreachos-bot"
+          git config user.email "actions@github.com"
+          git add state.json outreach_log.csv gunluk_ozet/ candidate_pool.json
+          git diff --staged --quiet && { echo "değişiklik yok"; exit 0; }
+          git commit -m "Günlük tarama: $(date -u +%Y-%m-%d)"
+          for i in 1 2 3 4 5; do
+            if git push; then echo "push başarılı (deneme $i)"; exit 0; fi
+            echo "push reddedildi, rebase edilip tekrar denenecek (deneme $i)"
+            git pull --rebase --autostash origin main || exit 1
+            sleep $((i * 3))
+          done
+          echo "::error::5 denemede push edilemedi — bu run'ın kayıtları KAYIP"
+          exit 1
+
+      # Bildirim: script gmail.compose ile sınırlı olduğu için mail GÖNDEREMİYOR.
+      # Bunun yerine issue açıyoruz; GitHub repo sahibine otomatik bildirim maili atar.
+      - name: Günlük özeti issue olarak aç
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f run_summary.md ]; then
+            gh issue create \
+              --title "İş arama taraması — $(date -u +%Y-%m-%d)" \
+              --body-file run_summary.md \
+              --repo "${{ github.repository }}" || echo "issue açılamadı (kritik değil)"
+          fi

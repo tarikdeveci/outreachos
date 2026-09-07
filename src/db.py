@@ -8,7 +8,11 @@ import json
 import os
 from datetime import datetime, timezone
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Veri kökü. Kod ve veri ayrı repolarda durur (kod public, veri private), bu yüzden
+# veri yolu tek bir yerden ayarlanabilir olmalı. OUTREACHOS_DATA_DIR verilmezse
+# repo kökü kullanılır — tek klasörde çalışan yerel/self-host kurulumu bozulmasın.
+BASE_DIR = os.environ.get("OUTREACHOS_DATA_DIR") or os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "tracker.db")
 CSV_PATH = os.path.join(BASE_DIR, "outreach_log.csv")
 STATE_PATH = os.path.join(BASE_DIR, "state.json")

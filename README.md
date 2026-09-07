@@ -45,17 +45,50 @@ Sonra tarayıcıda: **http://localhost:8787**
 
 ## 2. Dosya Yapısı
 
+Bu repo **kodun tamamını** tutar; kişisel veri (profil, CV, loglar) ayrı bir private
+repoda durur ve koda `OUTREACHOS_DATA_DIR` ile gösterilir. Tek klasörde çalışmak
+isterseniz değişkeni hiç tanımlamayın — veri kökü repo kökü olur.
+
 ```
-is-arama-otomasyon/
-├── outreach_log.csv        # insan-okunur log (DB'den senkronlanır — elle de düzenlenebilir)
-├── state.json              # profil + kurallar + geçmiş (migration kaynağı)
-├── tracker.db              # SQLite — BİRİNCİL veri (migration üretir)
+outreachos/
 ├── src/
-│   ├── db.py               # şema + durum normalizasyonu
+│   ├── db.py               # şema + durum normalizasyonu + veri kökü seam'i
 │   ├── migrate.py          # CSV+JSON -> DB (idempotent, güvenli)
 │   ├── app.py              # stdlib web sunucu + JSON API
 │   └── pipeline.py         # KARAR MOTORU (rol filtresi, email doğrulama)
-└── web/index.html          # dashboard arayüzü (Tailwind + Chart.js CDN)
+├── scripts/                # GÜNLÜK MOTOR (cron bunu çalıştırır)
+│   ├── discover.py         # ana akış: keşif → doğrulama → taslak → guard → rapor
+│   ├── drafting.py         # judge / draft / verify (3 ayrı LLM çağrısı)
+│   ├── deliverability.py   # bounce ölçümü + eşikler + devre kesici
+│   ├── audit_drafts.py     # bekleyen taslak triyajı
+│   ├── autosend.py         # veto pencereli gönderim (varsayılan KAPALI)
+│   ├── report.py           # günlük rapor + ATS digest
+│   ├── refresh_pool.py     # aday havuzunu tazeler
+│   └── get_gmail_token.py  # Gmail refresh token → GitHub secret
+├── web/index.html          # dashboard arayüzü (Tailwind + Chart.js CDN)
+├── state.example.json      # profil şablonu — kopyalayıp doldurun
+└── .github/workflows/daily.example.yml   # cron şablonu (veri reponuza kopyalayın)
+```
+
+Veri tarafında (ayrı private repo veya aynı klasör) beklenen dosyalar:
+
+```
+state.json              # profil + kurallar + geçmiş
+outreach_log.csv        # insan-okunur log
+tracker.db              # SQLite — BİRİNCİL veri (migration üretir)
+cv/                     # taslak yazarken kullanılan özgeçmişler
+gunluk_ozet/            # her run'ın günlük özeti
+candidate_pool.json     # keşif havuzu
+```
+
+Motorun saf mantık modülleri ağsız kendi kendini test eder:
+
+```bash
+python scripts/deliverability.py
+python scripts/audit_drafts.py
+python scripts/autosend.py
+python scripts/report.py
+python scripts/discover.py --self-test
 ```
 
 ---
@@ -168,7 +201,11 @@ sert tavan (varsayılan 5) uygulanır.
 Bütün guard modülleri ağsız self-test içerir:
 
 ```bash
-python scripts/deliverability.py && python scripts/audit_drafts.py && python scripts/autosend.py
+python scripts/deliverability.py
+python scripts/audit_drafts.py
+python scripts/autosend.py
+python scripts/report.py
+python scripts/discover.py --self-test
 ```
 
 ---

@@ -32,12 +32,28 @@ kararlar da değişir.
 ## 2. İki Repo Ayrımı
 
 ```
-outreachos        (PUBLIC)   → kod, karar motoru, dashboard
-outreachos-data   (PRIVATE)  → profil, CV, state, günlük loglar, cron workflow
+outreachos        (PUBLIC)   → kodun TAMAMI: karar motoru, dashboard, günlük motor (scripts/)
+outreachos-data   (PRIVATE)  → yalnızca veri: profil, CV, state, günlük loglar, cron workflow
 ```
 
-**Neden:** kod paylaşılabilir olmalı ama profil/CV/kiminle iletişime geçildiği paylaşılamaz.
-Cron her run'da public repoyu private repo içine klonlar (`_code/`), kararları oradan okur.
+**Neden:** kod paylaşılabilir olmalı, profil/CV/kiminle iletişime geçildiği paylaşılamaz.
+Ayrım ancak **hiçbir kod private repoda kalmazsa** işe yarar: aksi halde kodu göstermek
+için veriyi de göstermek gerekir. Bu yüzden `scripts/` public repodadır.
+
+**Kod veriyi nasıl bulur — tek seam:** `OUTREACHOS_DATA_DIR` ortam değişkeni.
+
+```
+OUTREACHOS_DATA_DIR tanımlıysa  → veri kökü orasıdır   (iki-repo kurulumu, cron)
+tanımlı değilse                 → kod reposunun kökü   (tek klasör, yerel/self-host)
+```
+
+`scripts/discover.py` ve `src/db.py` **aynı** değişkeni okur; bu yüzden karar motoru ile
+günlük motor her zaman aynı `state.json` / `tracker.db` / `outreach_log.csv` dosyalarını
+görür. (Eskiden `state.json` klonun köküne kopyalanıyordu — o hack kalktı.)
+
+Cron akışı: private repo checkout edilir → public repo `_code/`e klonlanır →
+`OUTREACHOS_DATA_DIR=$GITHUB_WORKSPACE` ile `_code/scripts/discover.py` çalışır →
+sonuçlar private repoya geri commit'lenir.
 
 > ⚠️ Public repo'nun `.gitignore`'una private repo klasörünü **mutlaka** ekleyin. Yoksa bir
 > `git add .` kişisel verinizi public'e taşır. (Biz bunu geç fark ettik.)
@@ -294,24 +310,37 @@ Bu sıra tesadüfi değil — her adım bir öncekini doğrular. **Sırayı atla
 
 ## 12. Dosya Haritası
 
-**Public repo (kod):**
+**Public repo (kodun tamamı):**
 ```
 src/pipeline.py     karar motoru — rol filtresi, eleme kuralları (anahtarsız çalışır)
 src/app.py          yerel dashboard (stdlib HTTP sunucu)
-src/db.py           SQLite şema + durum normalizasyonu
+src/db.py           SQLite şema + durum normalizasyonu + veri kökü seam'i
 src/migrate.py      CSV/JSON → DB (idempotent)
-```
 
-**Private repo (veri + cron):**
-```
 scripts/discover.py       ana akış: keşif → doğrulama → taslak → guard → rapor
 scripts/drafting.py       judge / draft / verify + deterministik sayı denetimi
 scripts/deliverability.py bounce ölçümü + eşikler + devre kesici
 scripts/audit_drafts.py   bekleyen taslak triyajı (mükerrer + içerik)
 scripts/autosend.py       veto pencereli gönderim (varsayılan KAPALI)
 scripts/report.py         günlük rapor + ATS digest + LinkedIn hedefleri
+scripts/refresh_pool.py   aday havuzunu tazeler (elle çalıştırılır)
+scripts/get_gmail_token.py Gmail refresh token → GitHub secret
+
+.github/workflows/daily.example.yml   cron şablonu (fork edenler kopyalar)
+```
+
+**Private repo (yalnızca veri + cron):**
+```
+state.json            profil + kurallar + iletişim geçmişi (LLM'in tek gerçek kaynağı)
+cv/                   taslak yazarken bağlam olarak kullanılan özgeçmişler
+outreach_log.csv      insan-okunur append-only log
+tracker.db            dashboard verisi
+gunluk_ozet/          her run'ın günlük özeti
+candidate_pool.json   keşif havuzu
 .github/workflows/daily.yml   cron tanımı ve tüm ayar knob'ları
 ```
+
+Burada **kod yoktur** — bu repo hiç kimseyle paylaşılmaz, paylaşılması da gerekmez.
 
 Guard modüllerinin hepsi **saf çekirdek + kendi kendini test eden** yapıda:
 ```bash

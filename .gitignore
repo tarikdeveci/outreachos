@@ -11,6 +11,9 @@ token.json
 .env
 cv/
 gunluk_ozet/
+# Motor tek-klasor modunda bunlari repo kokune yazar; kosu ciktisi public'e gitmez.
+run_summary.md
+candidate_pool.json
 
 # --- Python ---
 __pycache__/
