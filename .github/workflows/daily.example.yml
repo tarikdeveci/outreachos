@@ -11,8 +11,12 @@
 name: Günlük iş arama taraması
 
 on:
-  schedule:
-    - cron: "0 5 * * *"        # 05:00 UTC = 08:00 Europe/Istanbul
+  # NOT: schedule bilerek YOK. Bu şablon public kod reposunda duruyor ve secret'sız;
+  # bir `schedule:` tetikleyicisi burada kalırsa GitHub bu repoyu da her gün otomatik
+  # çalıştırır ve secret'lar boş olduğu için her run başarısız olur (2026-09'da 15 run
+  # boyunca oldu). Cron'u KENDİ private veri reponuzdaki kopyada (`daily.yml`) açın:
+  #   schedule:
+  #     - cron: "0 5 * * *"      # 05:00 UTC = 08:00 Europe/Istanbul
   workflow_dispatch:            # elle de çalıştırılabilsin
     inputs:
       dry_run:
