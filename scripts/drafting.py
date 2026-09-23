@@ -130,7 +130,9 @@ def draft(company: dict, site_text: str, profile: dict, sektor: str,
         user += (f"\n\n--- ÖNCEKİ DENEMEN REDDEDİLDİ ---\n{duzeltme}\n"
                  "Bu sorunları gidererek yeniden yaz. Şüphelendiğin iddiayı "
                  "yazmaktansa çıkar.")
-    return _call(DRAFT_MODEL, DRAFT_SYSTEM, user, max_tokens=1500)
+    # 1500 → 4000: aynı model, aynı kesilme riski (bkz. verify). Taslak JSON'u mail
+    # gövdesi + skor + hedef roller + LinkedIn notu taşıyor, yani verify'dan uzun.
+    return _call(DRAFT_MODEL, DRAFT_SYSTEM, user, max_tokens=4000)
 
 
 # ---------------------------------------------------------------- 3) doğrulama
@@ -160,15 +162,33 @@ VERIFY_SYSTEM = (
 
 
 def verify(body: str, profile: dict) -> dict | None:
+    # max_tokens 800 değil 3000: 800'de claude-sonnet-5 cevabı JSON kapanmadan kesiliyordu
+    # (stop_reason=max_tokens, çoğu zaman metin bile boş). Ölçülen: 2026-09-22 run'ında
+    # 16 doğrulama çağrısının 16'sı böyle düştü. Çağrı BAŞARILI sayıldığı için hata sessiz
+    # kalıyor, denetim "içerik otomatik doğrulanamadı" diyor ve o taslak GÖNDERİLEMİYOR;
+    # sonuç: bekleyen taslak sayısı 12'nin altına inemedi ve üretim ~2 hafta kilitlendi.
+    # Cevap normalde ~200 token; tavan maliyeti değil, kesilmeyi engelliyor.
     return _call(VERIFY_MODEL, VERIFY_SYSTEM,
                  f"--- PROFİL ---\n{json.dumps(profile, ensure_ascii=False)}\n\n"
-                 f"--- MAİL METNİ ---\n{body}",
-                 max_tokens=800)
+                 f"--- MAİL METNİ ---\n{strip_urls(body)}",
+                 max_tokens=3000)
 
 
 # ---------------------------------------------------------------- sayı denetimi
 NUM_RE = re.compile(r"\d[\d.,]*\s*(?:%|k\+|m\+|bin|milyon)?", re.I)
 NUM_WHITELIST = {"1", "2", "3", "4", "5", "2022", "2023", "2024", "2025", "2026"}
+URL_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
+
+
+def strip_urls(body: str) -> str:
+    """Gövdedeki URL'leri denetim dışına çıkarır.
+
+    URL bir İDDİA değildir; içindeki rakamlar da öyle. Gmail, taslak API üzerinden
+    yazılan linkleri `google.com/url?q=...&ust=1790242035715000&sa=E` biçimine sarıyor
+    ve o 16 haneli zaman damgası hem numeric_check'e "profilde olmayan sayı" diye
+    takılıyor hem de doğrulayan modele uydurma metrik gibi görünebiliyordu. Denetim
+    metni değil iddiaları okumalı."""
+    return URL_RE.sub(" ", body or "")
 
 
 def numeric_check(body: str, profile: dict) -> str | None:
@@ -179,7 +199,7 @@ def numeric_check(body: str, profile: dict) -> str | None:
     kullanıcı' uydurmasını yakalayan buydu.
     """
     prof_text = json.dumps(profile, ensure_ascii=False).lower()
-    for raw in NUM_RE.findall(body):
+    for raw in NUM_RE.findall(strip_urls(body)):
         tok = raw.strip().rstrip(".,").lower().replace(" ", "")
         if not tok or tok in NUM_WHITELIST:
             continue

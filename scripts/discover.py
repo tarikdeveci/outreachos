@@ -638,31 +638,49 @@ def _header(payload: dict, name: str) -> str:
 EMAIL_IN = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 
-def existing_draft_domains(token: str, own: str = "") -> tuple[set[str], int, list]:
-    """Gmail Taslaklar'ı TEK geçişte tarar → (domainler, bekleyen_outreach_sayısı, parsed_drafts).
+def existing_draft_domains(token: str, own: str = "") -> tuple[set[str], int, list, int]:
+    """Gmail Taslaklar'ı tarar → (domainler, bekleyen_outreach_sayısı, parsed_drafts, eksik).
     parsed_drafts: audit_drafts.parse_draft çıktısı (id/to/domain/subject/body). Aynı firmaya
     2. taslak açmamak (domainler) + bekleyen-taslak cap'i (sayı) + mükerrer/içerik triyajı
     (audit_drafts) hepsi bu tek listeden beslenir. format=full: gövde içerik denetimi için gerekli;
-    maliyet audit'in id-bazlı cache'i + AUDIT_MAX_VERIFY kotasıyla sınırlanır."""
+    maliyet audit'in id-bazlı cache'i + AUDIT_MAX_VERIFY kotasıyla sınırlanır.
+
+    `eksik`: listelenen ama OKUNAMAYAN taslak sayısı (+ listenin kendisi alınamadıysa 1).
+    Sıfırdan büyükse tarama EKSİKTİR ve "bu taslak artık yok" çıkarımı yapılamaz; çağıran
+    requeue_deleted_drafts'ı atlar. Neden: okunamayan taslak sessizce 'yok' sayılıyordu ve
+    firmaları 'taslağı silinmiş' diye havuza geri dönüyordu — kullanıcının Taslaklar'ında
+    o mailler dururken. Aynı sebeple liste artık sayfalanıyor: tek sayfa (100) tavanı
+    aşıldığında geri kalan taslaklar da 'silinmiş' sayılırdı."""
     doms: set[str] = set()
     pending = 0
     parsed: list = []
-    raw = _get("https://gmail.googleapis.com/gmail/v1/users/me/drafts?maxResults=100",
-               {"Authorization": "Bearer " + token})
-    if not raw:
-        return doms, pending, parsed
-    try:
-        ids = [d["id"] for d in json.loads(raw).get("drafts", [])]
-    except (json.JSONDecodeError, KeyError):
-        return doms, pending, parsed
+    ids: list = []
+    page = ""
+    for _ in range(10):                  # 10 sayfa × 100 = 1000 taslak, fazlası zaten arıza
+        url = ("https://gmail.googleapis.com/gmail/v1/users/me/drafts?maxResults=100"
+               + (f"&pageToken={page}" if page else ""))
+        raw = _get(url, {"Authorization": "Bearer " + token})
+        if not raw:
+            return doms, pending, parsed, 1
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return doms, pending, parsed, 1
+        ids += [d["id"] for d in data.get("drafts", []) if d.get("id")]
+        page = data.get("nextPageToken", "")
+        if not page:
+            break
+    missed = 0
     for did in ids:
         m = _get(f"https://gmail.googleapis.com/gmail/v1/users/me/drafts/{did}?format=full",
                  {"Authorization": "Bearer " + token})
         if not m:
+            missed += 1
             continue
         try:
             dj = json.loads(m)
         except json.JSONDecodeError:
+            missed += 1
             continue
         pd = audit_drafts.parse_draft(dj)
         parsed.append(pd)
@@ -670,7 +688,9 @@ def existing_draft_domains(token: str, own: str = "") -> tuple[set[str], int, li
             doms.add(pd["domain"])
         if deliverability.is_outreach_recipient(pd["to"], own):
             pending += 1
-    return doms, pending, parsed
+    if missed:
+        print(f"  ! {missed}/{len(ids)} taslak okunamadı — bu run'da taslak taraması eksik")
+    return doms, pending, parsed, missed
 
 
 def scan_sent(state: dict, token: str, own: str, sink=None) -> int:
@@ -732,8 +752,14 @@ def scan_sent(state: dict, token: str, own: str, sink=None) -> int:
 MAX_REDRAFT = 2
 
 
-def requeue_deleted_drafts(state: dict, parsed_drafts: list, sent_events: list) -> list:
+def requeue_deleted_drafts(state: dict, parsed_drafts: list, sent_events: list,
+                           scan_complete: bool = True) -> list:
     """Gönderilmeden silinen taslakların firmalarını havuza geri kazandırır.
+
+    scan_complete=False → hiçbir şey yapma. "Taslak artık Gmail'de yok" çıkarımı ancak
+    taslak listesinin TAMAMI okunabildiyse geçerlidir; eksik bir taramada duran taslaklar
+    da 'silinmiş' görünür ve firma yanlışlıkla havuza döner (sonra aynı firmaya ikinci bir
+    taslak açılır). 2026-09'da tam olarak bu oldu.
 
     Bir firma companies_already_contacted'a girdiği anda bir daha taslak açılmıyordu;
     taslağın gönderilip gönderilmediğine bakılmıyordu. Bekleyen-taslak freni (>12)
@@ -753,6 +779,8 @@ def requeue_deleted_drafts(state: dict, parsed_drafts: list, sent_events: list) 
     kesilebilir. O sınırın ötesindeki bir gönderim 'yok' gibi görünür ve firma haksız
     yere kuyruğa düşerdi — bu yüzden yalnızca taramanın GERÇEKTEN ulaştığı en eski
     mesajdan sonra oluşturulmuş taslaklar değerlendirilir."""
+    if not scan_complete:
+        return []
     contacted = state.setdefault("companies_already_contacted", {})
     queue = state.setdefault("redraft_queue", [])
     live_ids = {d.get("id") for d in (parsed_drafts or []) if d.get("id")}
@@ -853,12 +881,17 @@ def main() -> int:
         added = scan_sent(state, token, own, sink=sent_events)
         if added:
             print(f"  ~ {added} gönderilen mail state'e işlendi — o firmalara tekrar mail yok")
-        draft_domains, pending_count, parsed_drafts = existing_draft_domains(token, own)
+        draft_domains, pending_count, parsed_drafts, draft_scan_missed = \
+            existing_draft_domains(token, own)
         if draft_domains:
             print(f"  ~ {len(draft_domains)} mevcut taslak domaini — aynı firmaya 2. taslak açılmayacak")
         # scan_sent + taslak listesi hazır: gönderilmeden silinen taslakların firmalarını
         # havuza geri al. contacted/seen_domains kümeleri AŞAĞIDA kuruluyor, o yüzden burada.
-        requeued = requeue_deleted_drafts(state, parsed_drafts, sent_events)
+        # Taslak taraması eksikse bu adım atlanır — eksik liste 'silinmiş' sanılır.
+        requeued = requeue_deleted_drafts(state, parsed_drafts, sent_events,
+                                          scan_complete=(draft_scan_missed == 0))
+        if draft_scan_missed:
+            print("  ! taslak taraması eksik — 'gönderilmeden silinmiş' değerlendirmesi atlandı")
         if requeued:
             print(f"  ↩ {len(requeued)} firma yeniden taranabilir: taslağı gönderilmeden "
                   f"silinmişti ({', '.join(requeued[:5])}{' …' if len(requeued) > 5 else ''})")
@@ -1252,6 +1285,11 @@ def _self_test() -> int:
 
     # Gönderilenler hiç taranamadıysa hiçbir şeye dokunma (fail-safe)
     assert requeue_deleted_drafts(fresh(), live, []) == []
+
+    # Taslak listesi eksik okunduysa da dokunma: duran taslak 'silinmiş' sanılmasın
+    eksik = fresh()
+    assert requeue_deleted_drafts(eksik, live, sent, scan_complete=False) == []
+    assert "silinmis" in eksik["companies_already_contacted"]
 
     # Tarama penceresinden eski kayıt korunur (scan_sent ~200 mesajda kesiliyor)
     assert "tarama_disi" in s["companies_already_contacted"]
