@@ -367,6 +367,7 @@ kayıtlardan türetilir. Elle işaretlenen bir alan yoktur; kullanıcıya soru s
 - **Görüşme hazırlığı (`prep.py`).** Son 14 günde görüşme daveti gelen her firma için bir kez
   hazırlık notu yazılır: şirket ne yapıyor, profilden uyan noktalar, sorulabilecekler,
   adayın sorabilecekleri. Girdi firmanın ana sayfası, profil ve gelen yanıtın özetidir.
+  Bot kimliğini reddeden site için sayfa tarayıcı başlıklarıyla bir kez daha istenir.
   Sitede ve profilde geçmeyen bir sayı içeren not atılır (taslaklardaki `numeric_check`).
   Not kayda `hazirlik` olarak yazılır, o günün raporuna ve `takip.md`'ye girer. İki
   başarısız denemeden sonra (site açılmıyor, not denetimden dönüyor) bırakılır.

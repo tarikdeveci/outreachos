@@ -29,13 +29,16 @@ PREP_SYSTEM = (
     '"sor": ["adayın şirkete sorabileceği, siteye dayanan en fazla 3 soru"]}')
 ALANLAR = (("uyum", 3, "Sana uyan noktalar"), ("sorulabilir", 4, "Sorulabilecekler"),
            ("sor", 3, "Sen sor"))
+TARAYICI = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en,tr;q=0.8"}
 
 
 def _s(x) -> str:
     return re.sub(r"\s+", " ", re.sub("\\s*[\u2014\u2013]\\s*", ", ", str(x or ""))).strip()
 
 
-def pending(contacted: dict, now_ms: int, cap: int = 3) -> list:
+def pending(contacted: dict, now_ms: int, cap: int = 5) -> list:
     """Yeni görüşme daveti gelmiş, notu henüz yazılmamış kayıtlar."""
     out = []
     for firma, rec in contacted.items():
@@ -49,7 +52,9 @@ def pending(contacted: dict, now_ms: int, cap: int = 3) -> list:
 
 
 def site_text(get_page, domain: str) -> str:
-    raw = get_page(f"https://{domain}")
+    # Görüşmeye çağıran firmanın tek sayfası okunuyor. Bot kimliğini reddeden site için
+    # tarayıcı başlıklarıyla bir kez daha denenir; soğuk taramada bu yapılmaz.
+    raw = get_page(f"https://{domain}") or get_page(f"https://{domain}", headers=TARAYICI)
     if not raw:
         return ""
     text = re.sub(r"<(script|style)\b.*?</\1>", " ", raw.decode("utf-8", errors="replace"),
@@ -142,9 +147,10 @@ if __name__ == "__main__":
         "ret": {"email": "hi@ret.io", "yanit_turu": "ret", "yanit_ms": now - GUN_MS}}}
     cc = st["companies_already_contacted"]
 
-    def page(url: str):
-        return (b"<html><script>var x = 99;</script><p>Acme builds AI tools for 40 hotels.</p>"
-                if "gecmis" not in url else None)
+    def page(url: str, headers=None):
+        if "gecmis" in url or ("acme" in url and not headers):   # acme bot kimliğini reddediyor
+            return None
+        return b"<html><script>var x = 99;</script><p>Acme builds AI tools for 40 hotels.</p>"
 
     def fake(model, system, user, max_tokens):
         if "ŞİRKET: uydur" in user:
