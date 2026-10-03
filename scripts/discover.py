@@ -487,32 +487,42 @@ ROLE_PREFIXES = {
     "booking", "reservations", "mail", "email", "post", "destek", "satis", "basin", "muhasebe",
     "kvkk", "siparis", "rezervasyon"}
 KISI_ADRESI = re.compile(r"^[a-z]{2,20}(?:[._-][a-z]{2,20})?$")
-KISI_ROLU = re.compile(r"\b(co-?founder|founder|kurucu|ceo|cto|chief|head of|vp|director|direktör|"
-                       r"engineering|talent|recruit\w*|people|hiring|human resources|"
-                       r"insan kaynakları)\b")
+# Unvan aranır, düz kelime değil: "a team of people" ya da "we're hiring" geçen kariyer
+# sayfasındaki accommodations@ kutusu kişi sayılıyordu.
+KISI_ROLU = re.compile(r"\b(co-?founder|founder|kurucu|ceo|cto|chief \w+ officer|head of \w+|vp|"
+                       r"vice president|director|direktör|recruiter|hiring manager|"
+                       r"talent (?:partner|acquisition|lead)|people (?:ops|operations|partner|lead)|"
+                       r"engineering (?:manager|lead)|insan kaynakları)\b", re.I)
 ILGISIZ_ROL = re.compile(r"\b(sales|marketing|support|press|legal|finance|customer|satış|"
-                         r"pazarlama|destek|basın|hukuk|muhasebe)\b")
+                         r"pazarlama|destek|basın|hukuk|muhasebe)\b", re.I)
 NAMED_CONTACT = os.environ.get("NAMED_CONTACT", "1") != "0"
 
 
 def _address_context(html: str, email: str) -> str:
-    """Adresin sayfadaki çevresi (etiketsiz, küçük harf): yanında kimin, hangi rolün yazdığı."""
+    """Adresin sayfadaki çevresi (etiketsiz): yanında kimin, hangi rolün yazdığı."""
     i = html.lower().find(email)
     if i < 0:
         return ""
-    text = re.sub(r"<[^>]+>", " ", html[max(0, i - 800):i + 300]).lower()
+    text = re.sub(r"<[^>]+>", " ", html[max(0, i - 800):i + 300])
     # Adreslerin kendisi atılır: people@ kutusu "people" rolüyle kendi kendine eşleşmesin.
     return re.sub(r"\s+", " ", re.sub(r"\S*@\S*", " ", text))
+
+
+def _adi_geciyor(yerel: str, ctx: str) -> bool:
+    """Adresin ilk parçası yanında ad soyad olarak yazıyor mu ("Ada Lovelace" ve ada@)."""
+    ilk = re.split(r"[._-]", yerel)[0].capitalize()
+    return re.search(rf"\b{re.escape(ilk)}\s+[A-ZÇĞİÖŞÜ][\w'’-]+", ctx or "") is not None
 
 
 def choose_address(seen: dict) -> tuple[str | None, str]:
     """Sitede bulunan adreslerden (adres → çevresindeki metin) yazılacak olanı seçer.
 
-    Sıra: (1) yanında kurucu, mühendislik ya da işe alım rolü geçen isimli kişi, (2) başvuru
-    kutusu (careers@, jobs@, people@), (3) genel kutu (info@, hello@). Destek, satış, basın gibi
-    rol kutularına ve yanında rol yazmayan kişi adreslerine yazılmaz: customer.experience@ gibi
-    iki kelimelik rol kutuları ad.soyad adresinden ayırt edilemiyor. NAMED_CONTACT=0 eski
-    davranışı (yalnızca genel kutu) geri getirir. Firma başına tek mail kuralı değişmez."""
+    Sıra: (1) yanında adı soyadı ve kurucu, mühendislik ya da işe alım unvanı yazan kişi,
+    (2) başvuru kutusu (careers@, jobs@, people@), (3) genel kutu (info@, hello@). Destek, satış,
+    basın gibi rol kutularına ve yanında adı ya da unvanı yazmayan adreslere yazılmaz:
+    customer.experience@ ve accommodations@ gibi kutular kişi adresinden başka türlü ayırt
+    edilemiyor. NAMED_CONTACT=0 eski davranışı (yalnızca genel kutu) geri getirir. Firma başına
+    tek mail kuralı değişmez."""
     def yerel(e: str) -> str:
         return e.split("@")[0].lower()
 
@@ -521,7 +531,7 @@ def choose_address(seen: dict) -> tuple[str | None, str]:
     yasak = ROLE_PREFIXES | set(GENERIC_PREFIXES)
     kisi = [e for e in sorted(seen) if NAMED_CONTACT and KISI_ADRESI.match(yerel(e))
             and not set(re.split(r"[._-]", yerel(e))) & yasak
-            and not ILGISIZ_ROL.search(seen[e] or "")]
+            and not ILGISIZ_ROL.search(seen[e] or "") and _adi_geciyor(yerel(e), seen[e])]
     for e in kisi:
         m = KISI_ROLU.search(seen[e] or "")
         if m:
@@ -540,29 +550,36 @@ def find_verified_email(domain: str) -> tuple[str | None, str]:
     # site 8 saniyede yanıt verir; vermiyorsa zaten sıradaki adaya geçmek daha verimli.
     paths = ["", "/contact", "/iletisim", "/contact-us", "/about", "/hakkimizda",
              "/careers", "/kariyer", "/en/contact", "/tr/iletisim"]
+    # İletişim sayfası form olan şirketin genel kutusu çoğu zaman yalnızca yasal sayfada yazar.
+    # Buradaki kişi adresi (veri sorumlusu gibi) seçilmesin diye bağlamı boş tutulur.
+    yasal = ["/privacy", "/privacy-policy", "/imprint", "/impressum"]
     seen: dict[str, str] = {}
+    okunan: set = set()
 
     def topla(p: str, timeout: int) -> None:
+        okunan.add(p)
         html_bytes = _get(f"https://{domain}{p}", timeout=timeout)
         if not html_bytes:
             return
         html = html_bytes.decode("utf-8", errors="replace")
         for e in extract_emails(html):
             if e.split("@")[-1].lower().endswith(domain.lower()):
-                seen.setdefault(e, _address_context(html, e))
+                seen.setdefault(e, "" if p in yasal else _address_context(html, e))
 
-    bulunan = None
-    for p in paths:
-        topla(p, 8)
-        if seen:
-            bulunan = p
+    # Yazılabilir bir adres çıkana kadar sürer: ilk sayfada yalnızca support@ görüp durmak,
+    # iki sayfa ötedeki hello@ kutusunu kaçırıyordu.
+    for p in paths + yasal:
+        if p in yasal and budget_left() < 300:
+            break
+        topla(p, 8 if p in paths else 6)
+        if seen and choose_address(seen)[0]:
             break
     if not seen:
         return None, "sayfalarda e-posta bulunamadı"
     # İsimli kişi çoğu zaman ekip sayfasındadır; yalnızca genel kutu çıktıysa oraya da bakılır.
     if NAMED_CONTACT and budget_left() > 600 and "isimli" not in choose_address(seen)[1]:
         for p in ("/team", "/about"):
-            if p != bulunan:
+            if p not in okunan:
                 topla(p, 6)
     email, tur = choose_address(seen)
     if not email:
@@ -1919,7 +1936,11 @@ def _self_test() -> int:
     ctx_ = {e: _address_context(sayfa_, e) for e in ("ada@acme.io", "info@acme.io")}
     assert choose_address(ctx_)[0] == "ada@acme.io" and "isimli" in choose_address(ctx_)[1]
     assert choose_address({"ada@acme.io": "", "info@acme.io": ""}) == ("info@acme.io", "genel kutu")
-    assert choose_address({"can@acme.io": "can demir, head of sales"})[0] is None
+    assert choose_address({"can@acme.io": "Can Demir, Head of Sales"})[0] is None
+    assert choose_address({"can@acme.io": "Can Demir, Head of Engineering"})[0] == "can@acme.io"
+    # işlev kutusu: yakınında "people", "hiring", hatta bir unvan geçse de kişi sayılmaz
+    assert choose_address({"accommodations@acme.io": "a team of people. We are hiring. "
+                           "Our CEO Ada Lovelace says: request accommodations here"})[0] is None
     assert choose_address({"customer.experience@acme.io": ""})[0] is None   # ad.soyad sanılmaz
     assert choose_address({"ada@acme.io": ""})[0] is None                # rolü belirsiz tek kelime
     assert choose_address({"support@acme.io": "our founder"})[0] is None
@@ -1929,6 +1950,19 @@ def _self_test() -> int:
     ctx_ = {e: _address_context(kutu_, e) for e in ("people@acme.io", "zed@acme.io")}
     assert "people" not in ctx_["zed@acme.io"]                   # adres metni role sayılmaz
     assert choose_address(ctx_) == ("people@acme.io", "başvuru kutusu")
+    # ilk sayfada yalnızca rol kutusu varsa arama sürer; yasal sayfadaki kişi adresi seçilmez
+    site_ = {"": b"<p>support@acme.io</p>",
+             "/privacy": b"<p>Chief Privacy Officer: zed@acme.io, general: hello@acme.io</p>"}
+    gercek_mx = mx_ok  # noqa: N806
+    try:
+        _get = lambda u, **k: site_.get(u.split("acme.io", 1)[-1])       # noqa: E731
+        globals()["mx_ok"] = lambda d: True
+        assert find_verified_email("acme.io")[0] == "hello@acme.io"
+        site_["/privacy"] = b"<p>Chief Privacy Officer: zed@acme.io</p>"
+        assert find_verified_email("acme.io")[0] is None
+    finally:
+        _get = gercek_get
+        globals()["mx_ok"] = gercek_mx
 
     # --- Serper cevabı doğru ayrıştırılıyor mu (ağa çıkmadan) ---
     # CSE'den geçerken sessizce yanlış alan adı okumak, aramanın haftalarca
