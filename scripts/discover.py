@@ -86,7 +86,7 @@ AUTO_REPAIR_DELETE = os.environ.get("AUTO_REPAIR_DELETE") == "1"
 REPAIR_MAX = int(os.environ.get("REPAIR_MAX", "10"))
 # Gmail hız limiti (429 / 403 rateLimitExceeded) ve 5xx için yeniden deneme. Bekleme
 # run başına toplam bütçeyle sınırlı: 100 taslağın her biri 31 sn beklerse run biter.
-GMAIL_RETRY_WAITS = (1, 2, 4, 8, 16)
+GMAIL_RETRY_WAITS = (2, 4, 8, 16, 32)     # toplam 62 sn: dakikalık kota penceresini aşar
 GMAIL_RETRY_BUDGET_SEC = float(os.environ.get("GMAIL_RETRY_BUDGET_SEC", "240"))
 GMAIL_PAUSE_SEC = float(os.environ.get("GMAIL_PAUSE_SEC", "0.05"))
 _STARTED = time.monotonic()
@@ -556,7 +556,9 @@ def gmail_retryable(code: int, body: str) -> bool:
     (rateLimitExceeded / userRateLimitExceeded) geçicidir, yetki eksikliği kalıcıdır."""
     if code == 0 or code == 429 or 500 <= code < 600:
         return True
-    return code == 403 and "ratelimitexceeded" in body.lower()
+    low = body.lower()
+    return code == 403 and ("ratelimitexceeded" in low or "rate_limit_exceeded" in low
+                            or "quota exceeded" in low)
 
 
 def gmail_fetch(url: str, token: str, timeout: int = 20, expect: tuple = (),
@@ -582,17 +584,20 @@ def gmail_fetch(url: str, token: str, timeout: int = 20, expect: tuple = (),
             code = e.code
             retry_after = (e.headers.get("Retry-After") or "") if e.headers else ""
             try:
-                detail = e.read().decode(errors="replace")[:200]
+                detail = e.read().decode(errors="replace")
             except (OSError, AttributeError):
                 detail = ""
         except (URLError, TimeoutError, OSError) as e:
-            code, detail = 0, str(e)[:200]
+            code, detail = 0, str(e)
         if code in expect:
             break
         if _gmail_err_logged < 5:
             _gmail_err_logged += 1
             yol = url.split("?")[0].split("/users/me/")[-1]
-            print(f"  ! Gmail isteği başarısız ({yol}): HTTP {code or 'ağ hatası'} {' '.join(detail.split())}")
+            print(f"  ! Gmail isteği başarısız ({yol}): HTTP {code or 'ağ hatası'} "
+                  f"{' '.join(detail.split())[:200]}")
+        # Karar gövdenin TAMAMINA bakar: kota 403'ünde 'rateLimitExceeded' 200. karakterden
+        # sonra gelir; log için kırpılmış metne bakılınca hız limiti kalıcı hata sanılıyordu.
         if wait is None or not gmail_retryable(code, detail):
             break
         if retry_after.isdigit():
@@ -816,6 +821,8 @@ def existing_draft_domains(token: str, own: str = "") -> tuple[set[str], int, li
             pending += 1
     if missed:
         print(f"  ! {missed}/{len(ids)} taslak okunamadı — bu run'da taslak taraması eksik")
+    if _gmail_waited:
+        print(f"  ~ Gmail hız limiti: bu run'da toplam {_gmail_waited:.0f} sn beklendi")
     return doms, pending, parsed, missed
 
 
@@ -1522,7 +1529,7 @@ def _self_test() -> int:
         def __exit__(self, *a): return False
         def read(self): return b"{}"
 
-    def opener(codes):
+    def opener(codes, govde=b"userRateLimitExceeded"):
         """Sırayla verilen kodları döndüren sahte urlopen (200 → başarılı cevap)."""
         kalan = list(codes)
 
@@ -1530,21 +1537,32 @@ def _self_test() -> int:
             code = kalan.pop(0)
             if code == 200:
                 return _Resp()
-            raise HTTPError(req.full_url, code, "x", {}, io.BytesIO(b"userRateLimitExceeded"))
+            raise HTTPError(req.full_url, code, "x", {}, io.BytesIO(govde))
         return _open
 
-    def fetch(codes, **kw):
+    def fetch(codes, govde=b"userRateLimitExceeded", **kw):
         global _gmail_waited, _gmail_err_logged
         _gmail_waited, _gmail_err_logged = 0.0, 0
         uyku: list = []
         with redirect_stdout(io.StringIO()) as out:
-            sonuc = gmail_fetch("https://x/users/me/drafts/D1", "t", _open=opener(codes),
+            sonuc = gmail_fetch("https://x/users/me/drafts/D1", "t", _open=opener(codes, govde),
                                 _sleep=uyku.append, **kw)
         return sonuc, [u for u in uyku if u >= 1], out.getvalue()
 
     sonuc, uyku, log = fetch([429, 429, 200])
-    assert sonuc == (200, b"{}") and uyku == [1, 2], (sonuc, uyku)      # bekleyip başardı
+    assert sonuc == (200, b"{}") and uyku == list(GMAIL_RETRY_WAITS[:2]), (sonuc, uyku)   # bekleyip başardı
     assert "HTTP 429" in log and "userRateLimitExceeded" in log        # sebep log'da
+    # REGRESYON (2026-10-03): Gmail'in kota 403'ünde 'rateLimitExceeded' gövdenin 200.
+    # karakterinden SONRA gelir. Karar log için kırpılmış metne bakınca hiç yeniden
+    # denenmiyordu ve 152 taslağın 110'u her run'da okunamıyordu.
+    kota = ('{"error": {"code": 403, "message": "Quota exceeded for quota metric '
+            + "x" * 220 + '", "errors": [{"reason": "rateLimitExceeded"}]}}').encode()
+    sonuc, uyku, _ = fetch([403, 200], govde=kota)
+    assert sonuc == (200, b"{}") and uyku == [GMAIL_RETRY_WAITS[0]], (sonuc, uyku)
+    sonuc, uyku, _ = fetch([403, 200], govde=("y" * 220 + "rateLimitExceeded").encode())
+    assert sonuc == (200, b"{}"), sonuc                                 # sebep sonda da olsa
+    sonuc, uyku, _ = fetch([403], govde=b'{"error": {"message": "Insufficient Permission"}}')
+    assert sonuc == (403, b"") and uyku == []                           # yetki hatası: bekleme yok
     sonuc, uyku, _ = fetch([404])
     assert sonuc == (404, b"") and uyku == []                           # kalıcı hata: bekleme yok
     sonuc, uyku, log = fetch([404], expect=(404,))
