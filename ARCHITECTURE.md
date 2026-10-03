@@ -326,6 +326,38 @@ Neden iki kanal: (1) token'da `gmail.send` izni yoksa sessizce atlanır; (2) her
 **Tek bildirim kanalına güvenmeyin** — sessizce çalışmayan bir otomasyon, çalışmayan
 otomasyondan kötüdür.
 
+### 9.1 Günlük takip panosu (`takip.md`)
+
+Raporun başındaki "Bugün ilgilenmen gerekenler" bloğu ve veri reposundaki `takip.md`
+kayıtlardan türetilir. Elle işaretlenen bir alan yoktur; kullanıcıya soru sorulmaz.
+
+- **Yanıt okuma (`tracking.py`).** İki kaynak: (a) bizim açtığımız konuşmalara gelen her mail
+  (konuşma kimlikleri Gönderilenler taramasından toplanır, gönderen başka domainden yazsa da
+  yakalanır), (b) yazıştığımız adres ve domainlerden gelen, yeni konuşma açan mailler
+  (5'erli `from:(a OR b ...)` sorguları; tanıtım, sosyal ve forum kategorileri hariç).
+  İlk çalıştırmada pencere 120 gün, sonraki run'larda 30 gün.
+- **Sınıflama.** Görüşme daveti, ret, otomatik yanıt, insan yanıtı, gürültü. Kural tabanlıdır,
+  LLM çağrısı yoktur: konu ve özetteki kalıplar ile `List-Unsubscribe`, `Precedence`,
+  `Auto-Submitted` başlıkları. Bizim konuşmamıza gelen mail gürültü sayılmaz. Gürültü (bülten,
+  müşteri hizmeti maili) yanıt olarak kaydedilmez; eski sürümün "yanıt" diye yazdığı gürültü
+  kayıtları ilk çalıştırmada temizlenir.
+- **Firma durumu (`board.py`).** görüşme, yanıt geldi, otomatik yanıt, ret, gönderildi (yanıt
+  yok), taslak bekliyor, bounce, kapandı. Durum her run'da kayıttan yeniden hesaplanır.
+- **Cevaplanma.** Yanıttan sonra o hedefe Gönderilenler'de mail varsa "cevapladın" sayılır ve
+  iş listeden düşer.
+- **Kayıp taslak.** Taslağı Gmail'de olmayan ve gönderildiği bilinmeyen kayıt için Gmail'e
+  `in:sent to:<hedef>` sorulur (run başına en fazla 60 kayıt). Mail gittiyse `sent_confirmed`
+  yazılır (mükerrer kapısı da bunu görür), gitmediyse `gonderim_soruldu` yazılır ve bir daha
+  sorulmaz.
+- **İlan defteri (`ats_ledger`).** ATS özetindeki ilanlar günden güne taşınır; ilk kez görülen
+  ilan raporda `[YENİ]` etiketi alır. Konu satırında başvuru geçen mailler ayrı bir deftere
+  (`applications_seen`) yazılır; firmanın adı bir başvuru mailinde geçiyorsa ilan kapanır ve
+  listeden düşer. 30 gün görülmeyen ilan defterden silinir.
+
+Sınırlar: sınıflama kalıp tabanlıdır; hiçbir kalıba uymayan mail "yanıt" sayılıp kullanıcıya
+gösterilir (kaçırmaktansa fazladan göstermek tercih edildi). Başvuru eşlemesi firma adının
+mailin göndereninde ya da konusunda geçmesine dayanır.
+
 ---
 
 ## 10. Maliyet
@@ -385,6 +417,8 @@ scripts/audit_drafts.py   bekleyen taslak triyajı (mükerrer + içerik)
 scripts/repair.py         otomatik onarım + silme kararları (varsayılan KAPALI)
 scripts/autosend.py       veto pencereli gönderim (varsayılan KAPALI)
 scripts/report.py         günlük rapor + ATS digest + LinkedIn hedefleri
+scripts/tracking.py       gelen yanıtı okur ve sınıflar (görüşme, ret, otomatik, gürültü)
+scripts/board.py          takip panosu: firma durumu, bugünün işleri, ilan defteri
 scripts/refresh_pool.py   aday havuzunu tazeler (elle çalıştırılır)
 scripts/get_gmail_token.py Gmail refresh token → GitHub secret
 
@@ -398,6 +432,7 @@ cv/                   taslak yazarken bağlam olarak kullanılan özgeçmişler
 outreach_log.csv      insan-okunur append-only log
 tracker.db            dashboard verisi
 gunluk_ozet/          her run'ın günlük özeti
+takip.md              takip panosu (motor her run'da baştan yazar)
 candidate_pool.json   keşif havuzu
 .github/workflows/daily.yml   cron tanımı ve tüm ayar knob'ları
 ```
@@ -409,6 +444,8 @@ Guard modüllerinin hepsi **saf çekirdek + kendi kendini test eden** yapıda:
 python scripts/deliverability.py   # → self-test: OK
 python scripts/audit_drafts.py
 python scripts/autosend.py
+python scripts/tracking.py
+python scripts/board.py
 ```
 Ağ gerektirmezler; mantığı bozarsanız testler bağırır.
 

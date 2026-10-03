@@ -69,6 +69,8 @@ outreachos/
 │   ├── repair.py           # ⚠️ taslakları onarır, onarılamayanı siler (varsayılan KAPALI)
 │   ├── autosend.py         # veto pencereli gönderim (varsayılan KAPALI)
 │   ├── report.py           # günlük rapor + ATS digest
+│   ├── tracking.py         # gelen yanıtı okur ve sınıflar (görüşme, ret, otomatik, gürültü)
+│   ├── board.py            # takip panosu: firma durumu, bugünün işleri, ilan defteri
 │   ├── refresh_pool.py     # aday havuzunu tazeler
 │   └── get_gmail_token.py  # Gmail refresh token → GitHub secret
 ├── web/index.html          # dashboard arayüzü (Tailwind + Chart.js CDN)
@@ -85,6 +87,7 @@ outreach_log.csv        # insan-okunur log
 tracker.db              # SQLite — BİRİNCİL veri (migration üretir)
 cv/                     # taslak yazarken kullanılan özgeçmişler
 gunluk_ozet/            # her run'ın günlük özeti
+takip.md                # takip panosu: motor her run'da baştan yazar
 candidate_pool.json     # keşif havuzu
 ```
 
@@ -97,6 +100,8 @@ python scripts/drafting.py
 python scripts/repair.py
 python scripts/autosend.py
 python scripts/report.py
+python scripts/tracking.py
+python scripts/board.py
 python scripts/discover.py --self-test
 ```
 
@@ -233,6 +238,8 @@ python scripts/drafting.py
 python scripts/repair.py
 python scripts/autosend.py
 python scripts/report.py
+python scripts/tracking.py
+python scripts/board.py
 python scripts/discover.py --self-test
 ```
 

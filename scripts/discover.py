@@ -45,6 +45,8 @@ from urllib.request import Request, urlopen
 import deliverability
 import audit_drafts
 import autosend
+import board
+import tracking
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CODE = os.path.dirname(HERE)                # bu repo: karar motoru (src/pipeline.py)
@@ -804,11 +806,15 @@ def gmail_search(query: str, token: str, limit: int = 25) -> list[dict]:
     return out
 
 
-def track_replies(state: dict, token: str) -> list[str]:
+def track_replies(state: dict, token: str, sent_threads: dict | None = None,
+                  today: str = "") -> list[str]:
     """Bounce ve yanıtları gelen kutusundan okuyup state'e işler.
 
     Bounce'lar önemli: ölü bir adres bir kez bounce aldıysa bir daha o şirkete
     taslak açmanın anlamı yok. Adresi state'te işaretleyip bir daha denemiyoruz.
+
+    Yanıtları tracking.sync okur ve sınıflar: bizim açtığımız konuşmalar (sent_threads)
+    ile yazıştığımız adreslerin tamamı taranır, bülten ve müşteri maili yanıt sayılmaz.
     """
     notes: list[str] = []
     contacted = state.get("companies_already_contacted", {})
@@ -824,16 +830,12 @@ def track_replies(state: dict, token: str) -> list[str]:
                     contacted[firma]["email_dead"] = True
                     notes.append(f"**{firma}** — `{email}` bounce aldı, ölü olarak işaretlendi")
 
-    domains = {e.split("@")[-1] for e in by_email if "@" in e}
-    for dom in list(domains)[:20]:
-        for m in gmail_search(f"from:{dom} newer_than:14d -from:mailer-daemon", token):
-            firma = next((f for e, f in by_email.items() if e.endswith("@" + dom)), None)
-            if not firma:
-                continue
-            cur = contacted[firma].get("last_reply_seen") or ""
-            if m["date"][:16] not in cur:
-                contacted[firma]["last_reply_seen"] = f"YANIT ({m['date'][:16]}): {m['snippet'][:160]}"
-                notes.append(f"**{firma}** — yanıt geldi: {m['subject'][:80]}")
+    # Takip arızası taramayı durdurmasın: keşif ve gönderim bundan bağımsız, hata log'da kalır.
+    try:
+        notes += tracking.sync(state, lambda u: gmail_get(u, token), sent_threads or {},
+                               deliverability.FREE_MAIL, int(time.time() * 1000), today)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"  ! takip: yanıtlar okunamadı ({type(e).__name__}: {e})")
     return notes
 
 
@@ -904,10 +906,11 @@ def existing_draft_domains(token: str, own: str = "") -> tuple[set[str], int, li
     return doms, pending, parsed, missed
 
 
-def scan_sent(state: dict, token: str, own: str, sink=None) -> int:
+def scan_sent(state: dict, token: str, own: str, sink=None, threads=None) -> int:
     """Gönderilenler'deki her alıcıyı companies_already_contacted'a işler (yoksa).
     Böylece manuel/dışarıdan gönderilen başvurular da sayılır ve o firmaya BİR DAHA
-    taslak açılmaz — 'aynı işe iki kez başvurma' güvencesi state'e değil Gmail'e dayanır."""
+    taslak açılmaz — 'aynı işe iki kez başvurma' güvencesi state'e değil Gmail'e dayanır.
+    threads: threadId → o konuşmada yazdığımız adres (yanıt takibi bunlara gelen maili arar)."""
     contacted = state.setdefault("companies_already_contacted", {})
     # DOMAIN bazlı bilinen küme: aynı firmanın farklı adresi (iris@ vs hello@) mevcut
     # zengin kaydı (draft_id, yanıt geçmişi) ezmesin — dedup domain düzeyinde yeter.
@@ -925,7 +928,8 @@ def scan_sent(state: dict, token: str, own: str, sink=None) -> int:
             data = json.loads(raw)
         except json.JSONDecodeError:
             break
-        for mid in [m["id"] for m in data.get("messages", [])]:
+        for listed in data.get("messages", []):
+            mid = listed["id"]
             m = gmail_get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}"
                      "?format=metadata&metadataHeaders=To", token)
             if not m:
@@ -943,6 +947,8 @@ def scan_sent(state: dict, token: str, own: str, sink=None) -> int:
                 el, dom = e.lower(), e.lower().split("@")[-1]
                 if sink is not None:
                     sink.append((el, internal_ms))
+                if threads is not None and el != own.lower() and listed.get("threadId"):
+                    threads.setdefault(listed["threadId"], el)
                 if el == own.lower() or dom in known_doms:
                     continue
                 firma = dom.split(".")[0]
@@ -1082,18 +1088,21 @@ def main() -> int:
     parsed_drafts: list = []
     requeued: list = []            # token yoksa hiç kuyruğa alınmaz; rapor yine de okur
     draft_scan_missed = 0
+    live_ids = None                # Gmail'de duran taslak id'leri; None = liste bilinmiyor
     health = {"state": "UNKNOWN", "sent": 0, "hard": 0, "soft": 0, "replies": 0,
               "bounce_rate": 0.0, "trend": "—", "window_days": DELIVER_WINDOW_DAYS,
               "watch": BOUNCE_WATCH, "critical": BOUNCE_CRITICAL,
               "min_sent": DELIVER_MIN_SENT, "note": "Gmail token yok"}
     if token:
-        reply_notes = track_replies(state, token)
-        for n in reply_notes:
-            print(f"  ~ {n}")
         own = report.own_address(token) or profile.get("email", "")
-        added = scan_sent(state, token, own, sink=sent_events)
+        sent_threads: dict = {}
+        added = scan_sent(state, token, own, sink=sent_events, threads=sent_threads)
         if added:
             print(f"  ~ {added} gönderilen mail state'e işlendi — o firmalara tekrar mail yok")
+        # Yanıt takibi Gönderilenler'den SONRA: bizim açtığımız konuşmaları oradan öğreniyor.
+        reply_notes = track_replies(state, token, sent_threads, today)
+        for n in reply_notes:
+            print(f"  ~ {n}")
         draft_domains, pending_count, parsed_drafts, draft_scan_missed = \
             existing_draft_domains(token, own)
         if draft_domains:
@@ -1116,6 +1125,20 @@ def main() -> int:
         if requeued:
             print(f"  ↩ {len(requeued)} firma yeniden taranabilir: taslağı gönderilmeden "
                   f"silinmişti ({', '.join(requeued[:5])}{' …' if len(requeued) > 5 else ''})")
+        # Takip: taslağı kaybolmuş kayıtlara mail gitmiş mi, Gmail'e sor (sonuç kalıcı yazılır).
+        if not draft_scan_missed:
+            live_ids = {d["id"] for d in parsed_drafts}
+        try:
+            asked = board.resolve_sent(
+                state, board.sent_index(state, sent_events, deliverability.FREE_MAIL), live_ids,
+                lambda k: sent_count_to(k, token), deliverability.FREE_MAIL, today)
+            if asked:
+                print(f"  ~ takip: {asked} kayıt için Gönderilenler'e soruldu")
+            print("  ~ " + board.count_line(board.build_board(
+                state, int(time.time() * 1000), sent_events, live_ids,
+                deliverability.FREE_MAIL, today)))
+        except Exception as e:                              # noqa: BLE001
+            print(f"  ! takip: durum hesaplanamadı ({type(e).__name__}: {e})")
         health = deliverability.assess(
             gmail_search=lambda q: gmail_search(q, token, limit=60), token=token,
             contacted=state.get("companies_already_contacted", {}), sent_events=sent_events,
@@ -1459,9 +1482,30 @@ def main() -> int:
     # --- ikincil: ATS/portal digest (SEN başvuracaksın; taslak değil)
     ats_digest = report.gather_ats_digest(search, lambda t: pipeline.role_filter(t, profile)[0], log)
 
+    # --- takip panosu: ilan defteri (başvurulan ilan listeden düşer) + firma durumları
+    # Pano arızası raporu düşürmesin: state yukarıda yazıldı, rapor hatayı gösterir.
+    try:
+        board.update_ledger(state, ats_digest, today)
+        ats_digest = [a for a in ats_digest if not a.get("basvuruldu")]
+        if live_ids is not None:
+            live_ids |= {x["draft_id"] for x in drafted if x.get("draft_id")}
+        pano = board.build_board(state, int(time.time() * 1000), sent_events, live_ids,
+                                 deliverability.FREE_MAIL, today)
+        takip_lines = board.action_lines(pano)
+        with open(STATE_PATH, "w", encoding="utf-8") as f:   # ilan defteri state'e girdi
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        with open(os.path.join(DATA_DIR, "takip.md"), "w", encoding="utf-8") as f:
+            f.write(board.board_markdown(pano, today))
+        print("  ~ " + takip_lines[-1])
+    except Exception as e:                                  # noqa: BLE001
+        takip_lines = [f"Takip panosu kurulamadı ({type(e).__name__}: {e})"]
+        print(f"  ! {takip_lines[0]}")
+
     os.makedirs(OZET_DIR, exist_ok=True)
     with open(os.path.join(OZET_DIR, f"{today}.md"), "w", encoding="utf-8") as f:
         f.write(f"# Günlük Özet — {today} (hibrit script)\n\n")
+        f.write("## Bugün İlgilenmen Gerekenler\n\n")
+        f.write("\n".join(f"- {x}" for x in takip_lines) + "\n\n")
         f.write("## Mail Sağlığı\n\n")
         f.write("\n".join(banner_lines) + "\n\n")
         if audit_lines:
@@ -1513,7 +1557,8 @@ def main() -> int:
     #     (report.send_self_report; gmail.send, yalnızca kendi adresine — şirketlere DEĞİL).
     # (2) YEDEK: run_summary.md → GitHub issue (workflow açar, GitHub mail atar). Token'da
     #     gmail.send izni yoksa (yenilenmediyse) (1) atlanır ama (2) yine de eline ulaşır.
-    lines = list(banner_lines) + ["", f"**{len(drafted)} yeni taslak** Gmail'de hazır. Gönderme kararı sende.  ",
+    lines = ["### Bugün ilgilenmen gerekenler\n"] + [f"- {x}" for x in takip_lines] + [""]
+    lines += list(banner_lines) + ["", f"**{len(drafted)} yeni taslak** Gmail'de hazır. Gönderme kararı sende.  ",
              f"**{len(ats_digest)} ATS/portal ilanı** — bunlara SEN başvuracaksın.\n"]
     if audit_lines:
         lines += ["### Bekleyen taslak triyajı (mükerrer + içerik)"] + audit_lines + [""]
@@ -1535,7 +1580,8 @@ def main() -> int:
             lines.append("")
     if ats_digest:
         lines.append("### ATS/Portal üzerinden başvurulacaklar (sen başvur)\n")
-        lines += [f"- **{a['firma']}** — {a['title']} — {a['link']}" for a in ats_digest] + [""]
+        lines += [f"- {'**YENİ** ' if a.get('yeni') else ''}**{a['firma']}** — {a['title']} — {a['link']}"
+                  for a in ats_digest] + [""]
     li = report.build_linkedin_targets(drafted)
     if li:
         lines.append("### LinkedIn — bugün elle ulaş (en uygun 5 firma; hesabın güvende)\n")
@@ -1559,7 +1605,8 @@ def main() -> int:
         to = os.environ.get("REPORT_TO") or report.own_address(token) or profile.get("email", "")
         text = report.build_report_text(
             today, profile, drafted, ats_digest, reply_notes, skipped,
-            banner_lines=banner_lines, audit_lines=audit_lines, send_lines=send_lines)
+            banner_lines=banner_lines, audit_lines=audit_lines, send_lines=send_lines,
+            takip_lines=takip_lines)
         subject = f"İş arama raporu {today}: {len(drafted)} taslak, {len(ats_digest)} ATS"
         rid = report.send_self_report(to, subject, text, token) if to else None
         durum = f"gönderildi ({rid})" if rid else "gönderilemedi — GitHub issue yedeği devrede"

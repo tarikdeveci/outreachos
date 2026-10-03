@@ -149,7 +149,7 @@ def build_linkedin_targets(drafted, limit: int = 5) -> list:
 
 
 def build_report_text(day, profile, drafted, ats, reply_notes, skipped, banner_lines=None,
-                      audit_lines=None, send_lines=None) -> str:
+                      audit_lines=None, send_lines=None, takip_lines=None) -> str:
     """Kullanıcıya gidecek düz-metin günlük rapor. Saf fonksiyon (test edilebilir)."""
     name = profile.get("name", "")
     lines = [f"İş Arama Otomasyonu — Günlük Rapor ({day})", ""]
@@ -160,6 +160,9 @@ def build_report_text(day, profile, drafted, ats, reply_notes, skipped, banner_l
     lines.append("her taslak aşağıda listelenir; kalan outreach mailleri Gmail > Taslaklar'da bekliyor.")
     lines.append("")
 
+    if takip_lines:
+        lines += ["== Bugün ilgilenmen gerekenler =="] + [f"  • {x}" for x in takip_lines]
+        lines += ["  Tam pano: veri reposundaki takip.md", ""]
     if banner_lines:
         lines += list(banner_lines) + [""]
     if audit_lines:
@@ -170,7 +173,7 @@ def build_report_text(day, profile, drafted, ats, reply_notes, skipped, banner_l
     lines.append(f"== ATS/Portal üzerinden SEN başvuracaksın ({len(ats)}) ==")
     if ats:
         for a in ats:
-            lines.append(f"  • {a['firma']} — {a['title']}")
+            lines.append(f"  • {'[YENİ] ' if a.get('yeni') else ''}{a['firma']} — {a['title']}")
             lines.append(f"      {a['link']}")
     else:
         lines.append("  (bugün uygun yeni ATS ilanı bulunamadı)")

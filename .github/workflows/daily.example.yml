@@ -106,7 +106,7 @@ jobs:
           git config user.email "actions@github.com"
           # Yeni kurulumda bu dosyaların hepsi henüz yok (ör. candidate_pool.json);
           # olmayan yol `git add`i düşürür ve state.json de commit'lenemez.
-          for p in state.json outreach_log.csv gunluk_ozet candidate_pool.json; do
+          for p in state.json outreach_log.csv gunluk_ozet candidate_pool.json takip.md; do
             [ -e "$p" ] && git add "$p"
           done
           git diff --staged --quiet && { echo "değişiklik yok"; exit 0; }

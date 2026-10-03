@@ -13,6 +13,7 @@ cv/
 gunluk_ozet/
 # Motor tek-klasor modunda bunlari repo kokune yazar; kosu ciktisi public'e gitmez.
 run_summary.md
+takip.md
 candidate_pool.json
 
 # Oturum devir notları: şirket adları ve kişisel run verisi içerir.
