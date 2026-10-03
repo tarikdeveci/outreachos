@@ -57,7 +57,7 @@ GORUSME_IZ = GORUSME_KESIN + (
     "schedule a time", "book a time", "book a call", "quick call", "intro call", "hop on a call",
     "jump on a call", "have a chat", "love to chat", "love to talk", "let's talk",
     "calendly.com", "cal.com/", "meet.google.com", "google meet", "zoom.us", "teams.microsoft",
-    "invitation:", "davet:", "are you available", "your availability", "müsait",
+    "invitation:", "davet:", "davetiye", "are you available", "your availability", "müsait",
     "uygun olduğunuz")
 OTOMATIK_IZ = (
     "your application", "thank you for applying", "thanks for applying", "for your interest",
@@ -74,6 +74,13 @@ GURULTU_IZ = (
     "güvenlik uyarısı", "kampanya", "indirim")
 BOT_KUTUSU = ("noreply", "no-reply", "no_reply", "donotreply", "do-not-reply", "newsletter",
               "news@", "marketing", "notification", "mailer", "updates@", "digest")
+# Elle gönderilmiş (sent_scan) bir mail başvuru mu, destek yazışması mı: konu satırından.
+_IS = re.compile(
+    r"(?<![a-zçğıöşü])(?:engineer|developer|intern|position|roles?\b|appl(?:y|ication)|opportunit|"
+    r"hiring|career|jobs?\b|resume|cv\b|candidate|software|backend|frontend|full.?stack|mühendis|"
+    r"geliştirici|staj|pozisyon|başvuru|kariyer|özgeçmiş|yazılım|iş ?birliği|tanışma|ekibinize)")
+_IS_DEGIL = ("destek talebi", "arıza", "support request", "ticket", "refund", "iade", "garanti",
+             "warranty", "sipariş", "fatura", "invoice", "case ")
 
 def _low(s: str) -> str:
     """Türkçe güvenli küçük harf: 'İ'.lower() birleşik noktalı bir 'i' üretir, desen tutmaz."""
@@ -99,6 +106,11 @@ def _iso_ms(day) -> int:
         return int(datetime.strptime(str(day)[:10], "%Y-%m-%d").replace(tzinfo=TR).timestamp() * 1000)
     except ValueError:
         return 0
+
+
+def is_job(subject: str) -> bool:
+    t = _low(subject)
+    return not any(p in t for p in _IS_DEGIL) and bool(_IS.search(t))
 
 
 def classify(subject: str, snippet: str, sender: str = "", in_thread: bool = False,
@@ -231,6 +243,25 @@ def fetch_replies(get, contacted: dict, sent_threads: dict, free_mail=frozenset(
     return out
 
 
+def judge_manual(contacted: dict, get, free_mail=frozenset(), cap: int = 20) -> int:
+    """Elle gönderilmiş kayıtları bir kez sınıflar: yazdığımız mailin konusu başvuru mu?
+    Karar kayda yazılır (`basvuru`); destek kaydı gibi başvuru olmayan yazışma panoya girmez."""
+    n = 0
+    for rec in contacted.values():
+        if n >= cap:
+            break
+        if not isinstance(rec, dict) or rec.get("channel") != "sent_scan" or "basvuru" in rec:
+            continue
+        key = autosend.target_key(rec.get("email") or "@", free_mail)
+        if "@" in key:
+            continue                      # kişisel adres: zaten takip edilmiyor
+        metas = [read_meta(get, mid) for mid, _th in list_ids(get, f"in:sent to:{key}", cap=3)]
+        if any(metas):                    # liste boşsa (hata olabilir) karar yazılmaz, yine sorulur
+            rec["basvuru"] = any(is_job(m["subject"]) for m in metas if m)
+            n += 1
+    return n
+
+
 def fetch_applications(get, known: dict, skip=frozenset(), days: int = 60, cap: int = 60) -> list:
     """Başvuru onayı, ret ve davet mailleri (konu satırından). known/skip: yeniden okunmaz."""
     q = (f"-from:me newer_than:{days}d subject:(application OR applying OR applied OR "
@@ -301,6 +332,10 @@ def apply_replies(contacted: dict, replies: list, window_start_ms: int = 0) -> l
         if not isinstance(rec, dict):
             continue
         v = _verdict(msgs)
+        if v and rec.get("channel") == "sent_scan" and not rec.get("basvuru"):
+            if v["tur"] != GORUSME:
+                continue                  # başvuru olmayan elle yazışma; yalnızca davet sayılır
+            rec["basvuru"] = True
         eski = bool(rec.get("yanit_eski"))
         onceki = int(rec.get("yanit_ms") or 0)
         if v is None:
@@ -349,6 +384,7 @@ def sync(state: dict, get, sent_threads: dict, free_mail=frozenset(), now_ms: in
     İlk çalıştırmada geniş pencere okunur ki eski kayıtlar gerçek maillerden yeniden sınıflansın."""
     contacted = state.setdefault("companies_already_contacted", {})
     migrate_legacy(contacted)
+    judge_manual(contacted, get, free_mail)
     days = WINDOW_DAYS if state.get(READY_KEY) else FIRST_DAYS
     replies = fetch_replies(get, contacted, sent_threads, free_mail, days)
     notes = apply_replies(contacted, replies, now_ms - days * GUN_MS)
@@ -401,10 +437,12 @@ if __name__ == "__main__":
             heads += [{"name": k, "value": v} for k, v in extra.items()]
             return json.dumps({"threadId": th, "snippet": snip, "internalDate": str(ms),
                                "payload": {"headers": heads}}).encode()
-        if "subject%3A" in url:
+        if "in%3Asent" in url:
+            ids = [k for k in box if k.startswith("s:") and k[2:] in url]
+        elif "subject%3A" in url:
             ids = ["m5", "m1"]
         elif "from%3A%28" in url:
-            ids = ["m1", "m2", "m4"]
+            ids = ["m1", "m2", "m4", "m10"]
         else:
             ids = list(box)
         return json.dumps({"messages": [{"id": i, "threadId": box[i][0]} for i in ids]}).encode()
@@ -432,9 +470,22 @@ if __name__ == "__main__":
         "arkadas": {"email": "biri@gmail.com", "channel": "sent_scan", "date": "sent_detected",
                     "last_reply_seen": None}}}
     box["m7"] = ("t6", "Biri <biri@gmail.com>", "Re: selam", "akşam görüşelim mi", now - D, {})
+    # elle gönderilmiş üç kayıt: destek yazışması, başvuru, konusu belirsiz ama davet gelen
+    box["s:destek.io"] = ("x1", "me", "Scroll Tekerleği Arızası: Destek Talebi", "", now - 9 * D, {})
+    box["s:elle.io"] = ("x2", "me", "Yazılım Geliştirici Pozisyonu Hakkında", "", now - 9 * D, {})
+    box["s:davet.io"] = ("x3", "me", "Merhaba", "", now - 9 * D, {})
+    box["m8"] = ("t10", "Help <help@destek.io>", "Re: Destek", "Ürününüz kargoya verildi", now - D, {})
+    box["m9"] = ("t11", "IK <ik@elle.io>", "Re: Pozisyon", "Portfolyonuzu iletir misiniz?", now - D, {})
+    box["m10"] = ("t12", "Takvim <x@davet.io>", "Davetiye: Meeting Davet, Pzt 5 Eki", "", now - D, {})
     cc = st["companies_already_contacted"]
-    threads = {"t1": "hi@acme.io", "t2": "ik@beta.dev", "t5": "a@olu.com", "t6": "biri@gmail.com"}
+    for ad, adres in (("destek", "help@destek.io"), ("elle", "ik@elle.io"), ("davet", "x@davet.io")):
+        cc[ad] = {"email": adres, "channel": "sent_scan", "date": "sent_detected"}
+    threads = {"t1": "hi@acme.io", "t2": "ik@beta.dev", "t5": "a@olu.com", "t6": "biri@gmail.com",
+               "t10": "help@destek.io", "t11": "ik@elle.io"}
+    assert is_job("AI Engineer / EdTech Product Role") and not is_job("Lenovo Case 2031826834")
     notes = sync(st, fake_get, threads, free, now, "2026-10-04")
+    assert [cc[k]["basvuru"] for k in ("destek", "elle", "davet")] == [False, True, True]
+    assert [cc[k].get("yanit_turu") for k in ("destek", "elle", "davet")] == [None, YANIT, GORUSME]
     assert cc["acme"]["yanit_turu"] == GORUSME, cc["acme"]          # bülten (m2) durumu bozmadı
     assert cc["beta"]["yanit_turu"] == RET                           # başka domainden, konuşmamızda
     assert cc["gama"]["yanit_turu"] == YANIT                         # alt alandan gelen yeni konuşma
@@ -442,7 +493,7 @@ if __name__ == "__main__":
     assert cc["bltn"]["yanit_turu"] == OTOMATIK and cc["bltn"]["yanit_eski"]
     assert "yanit_turu" not in cc["olu"]                             # bounce maili yanıt değil
     assert "yanit_turu" not in cc["arkadas"]                         # kişisel yazışma takip edilmez
-    assert len(notes) == 3 and st[READY_KEY] == "2026-10-04", notes
+    assert len(notes) == 5 and st[READY_KEY] == "2026-10-04", notes
     assert [a["tur"] for a in st[APPS_KEY].values()] == [OTOMATIK]   # m1 firma yanıtı, tekrar yok
     assert sync(st, fake_get, threads, free, now, "2026-10-05") == []  # aynı mail ikinci kez not olmaz
     print("tracking self-test: OK")

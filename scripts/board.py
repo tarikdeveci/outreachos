@@ -126,8 +126,8 @@ def build_board(state: dict, now_ms: int, sent_events=(), live_drafts=None,
         if not isinstance(rec, dict) or not rec.get("email"):
             continue
         email = rec["email"].lower()
-        if rec.get("channel") == "sent_scan" and email.split("@")[-1] in free_mail:
-            continue                      # elle yazılmış kişisel mail, başvuru değil
+        if rec.get("channel") == "sent_scan" and not rec.get("basvuru"):
+            continue                      # elle yazılmış ama başvuru olmayan mail (kişisel, destek)
         key = autosend.target_key(email, free_mail)
         yanit_ms = int(rec.get("yanit_ms") or 0)
         rows.append({"firma": firma, "durum": status_of(rec, key, sent, live_drafts),
