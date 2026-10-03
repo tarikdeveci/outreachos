@@ -82,15 +82,26 @@ flowchart TD
 
 ### 3.1 Keşif
 Serper.dev üzerinden Google araması (anahtar yoksa/kota bitince DuckDuckGo'ya düşer) ile YC/accelerator dizinleri,
-"biz kimiz" sayfaları, iş ilanı sayfaları taranır. Çıktı: aday domain havuzu (~5800 domain).
+"biz kimiz" sayfaları, iş ilanı sayfaları taranır. Çıktı: aday domain havuzu (~7200 domain).
 Havuz ayrı bir scriptle (`refresh_pool.py`) periyodik beslenir; günlük run havuzdan tüketir.
 
+Dizinler iki listede durur. `SEED_DIRECTORIES` erken aşama ve Türkiye dizinleridir.
+`SCALEUP_DIRECTORIES` büyüme aşaması kaynaklarıdır: fonlanmış ve işe alan şirket listesi
+(TopStartups) ile Seri A ve Seri B ağırlıklı VC portföyleri (Avrupa ve Türkiye). İkinci
+listeden gelen aday `olcek` işareti alır. Bir dizin listeye girmeden önce `harvest_links` ile
+yerelde denenir; JavaScript ile çizilen ve düz HTML'de şirket linki vermeyen sayfa eklenmez.
+
 ### 3.2 Önceliklendirme
-Alfabetik sıra 5800 adayda her gün aynı isimlere takılmak demek. Bunun yerine:
+Alfabetik sıra 7200 adayda her gün aynı isimlere takılmak demek. Bunun yerine:
 `(1) şu an işe alıyor mu → (2) ekip hedef bantta mı → (3) domain` (`candidate_priority`).
 Hedef bant varsayılan olarak 20 ile 300 kişi arasıdır (`SCALEUP_BAND`): büyüyen şirketler öne
 alınır, sonra bandın altındaki ekipler, sonra ekibi bilinmeyenler, en sonda çok büyük şirketler.
 Kimse elenmez, yalnızca sıra değişir. Çok büyük şirketlerin ilanları ATS özetinden gelir.
+
+`olcek` işaretli adayın ekip büyüklüğü çoğu zaman bilinmez (VC portföy sayfası bunu vermez).
+Böyle bir aday "işe alıyor" sayılır ve bandın içinde, domaininden türetilen sabit bir sıraya
+yerleştirilir. Böylece ekibi bilinen YC şirketleriyle karışık sıralanır; ne hepsinin önüne
+geçer ne de listenin sonunda bekler.
 
 Arama sorguları haftanın gününe göre döner (`QUERIES_BY_WEEKDAY`): yurt dışı ağırlıklı, Türkiye
 haftada iki gün. Başvuranın aradığı rol state'teki `profile.targeting` alanında durur.
@@ -341,6 +352,11 @@ kayıtlardan türetilir. Elle işaretlenen bir alan yoktur; kullanıcıya soru s
   `Auto-Submitted` başlıkları. Bizim konuşmamıza gelen mail gürültü sayılmaz. Gürültü (bülten,
   müşteri hizmeti maili) yanıt olarak kaydedilmez; eski sürümün "yanıt" diye yazdığı gürültü
   kayıtları ilk çalıştırmada temizlenir.
+- **Elle gönderilmiş kayıtlar.** Gönderilenler taramasının eklediği kayıt (`sent_scan`) başvuru
+  olmayabilir (destek kaydı, kişisel yazışma). Her biri için bir kez `in:sent to:<hedef>`
+  sorulur ve yazılan mailin konusuna bakılır; karar kayda `basvuru` olarak yazılır. Başvuru
+  olmayan kayıt panoya girmez, gelen yanıtı da sayılmaz. Tek istisna görüşme davetidir: davet
+  gelen kayıt başvuru kabul edilir.
 - **Firma durumu (`board.py`).** görüşme, yanıt geldi, otomatik yanıt, ret, gönderildi (yanıt
   yok), taslak bekliyor, bounce, kapandı. Durum her run'da kayıttan yeniden hesaplanır.
 - **Cevaplanma.** Yanıttan sonra o hedefe Gönderilenler'de mail varsa "cevapladın" sayılır ve

@@ -67,7 +67,12 @@ def yc_havuzu(pool: dict) -> int:
         if c.get("status") != "Active" or not c.get("website"):
             continue
         dom = d.domain_of(c["website"])
-        if not dom or d.is_noise(dom) or dom in pool:
+        if not dom or d.is_noise(dom):
+            continue
+        if dom in pool:
+            # Ekip büyüklüğü ve işe alım durumu zamanla değişir; eski kayıt tazelenir.
+            if str(pool[dom].get("kaynak", "")).startswith("YC"):
+                pool[dom].update(ekip=c.get("team_size"), ise_aliyor=bool(c.get("isHiring")))
             continue
         pool[dom] = {
             "domain": dom,
@@ -128,12 +133,16 @@ def hn_havuzu(pool: dict, ay_sayisi: int = 14) -> int:
 # Sayfalanabilen dizinler: tek sayfa yerine bitene kadar gez.
 # İTÜ Çekirdek tek sayfada 10 şirket gösteriyor ama 19 sayfası var (198 şirket) —
 # sadece ilk sayfayı almak havuzun %95'ini kaçırıyordu.
+# Üçüncü alan: kaynak bir büyüme aşaması listesi mi (adaylar `olcek` işareti alır).
 PAGINATED = [
-    ("https://www.itucekirdek.com/girisimler?page={}", "İTÜ Çekirdek (sayfalı)"),
+    ("https://www.itucekirdek.com/girisimler?page={}", "İTÜ Çekirdek (sayfalı)", False),
+    # Fonlanmış ve işe alan şirketler, sayfa başına 20 kadar (2026-10-03'te denendi).
+    ("https://topstartups.io/?page={}", "TopStartups (sayfalı)", True),
 ]
 
 
-def harvest_paginated(tmpl: str, label: str, pool: dict, max_pages: int = 40) -> int:
+def harvest_paginated(tmpl: str, label: str, pool: dict, max_pages: int = 40,
+                      olcek: bool = False) -> int:
     """Yeni sonuç gelmeyi kesene kadar sayfaları gez (3 boş sayfa = son)."""
     added, empty = 0, 0
     for p in range(1, max_pages + 1):
@@ -144,6 +153,8 @@ def harvest_paginated(tmpl: str, label: str, pool: dict, max_pages: int = 40) ->
             pool[dom] = {"domain": dom, "kaynak": f"{label} s{p}",
                          "ulke": d.country_of(dom),
                          "eklendi": date.today().isoformat()}
+            if olcek:
+                pool[dom]["olcek"] = True
         added += len(new)
         if new:
             empty = 0
@@ -168,18 +179,21 @@ def main() -> int:
     n = hn_havuzu(pool)
     print(f"  {'HN Who is hiring (14 ay)':28s} {n:5d} yeni")
 
-    for tmpl, label in PAGINATED:
-        n = harvest_paginated(tmpl, label, pool)
+    for tmpl, label, olcek in PAGINATED:
+        n = harvest_paginated(tmpl, label, pool, olcek=olcek)
         print(f"  {label:28s} {n:4d} yeni (sayfalar gezildi)")
 
-    for url, label in d.SEED_DIRECTORIES:
-        fresh: dict[str, dict] = {}
-        n = d.harvest_links(url, label, fresh)
-        new = [dom for dom in fresh if dom not in pool]
-        for dom in new:
-            pool[dom] = {"domain": dom, "kaynak": label, "ulke": d.country_of(dom),
-                         "eklendi": date.today().isoformat()}
-        print(f"  {label:28s} {n:4d} link, {len(new):4d} yeni")
+    for dizinler, olcek in ((d.SEED_DIRECTORIES, False), (d.SCALEUP_DIRECTORIES, True)):
+        for url, label in dizinler:
+            fresh: dict[str, dict] = {}
+            n = d.harvest_links(url, label, fresh)
+            new = [dom for dom in fresh if dom not in pool]
+            for dom in new:
+                pool[dom] = {"domain": dom, "kaynak": label, "ulke": d.country_of(dom),
+                             "eklendi": date.today().isoformat()}
+                if olcek:
+                    pool[dom]["olcek"] = True
+            print(f"  {label:28s} {n:4d} link, {len(new):4d} yeni")
 
     with open(POOL_PATH, "w", encoding="utf-8") as f:
         json.dump({"guncellendi": date.today().isoformat(),

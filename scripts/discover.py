@@ -35,6 +35,7 @@ import re
 import sys
 import threading
 import time
+import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from email.message import EmailMessage
@@ -200,6 +201,26 @@ SEED_DIRECTORIES = [
     ("https://techstars.com/portfolio", "Techstars portföy"),
     ("https://joinef.com/companies/", "Entrepreneur First"),
     ("https://www.stationf.co/startups", "Station F (Fransa)"),
+]
+
+# Büyüme aşamasındaki şirketlerin listeleri (Seri A ve sonrası fon almış, işe alan).
+# Buradan gelen aday `olcek` işareti taşır: ekip büyüklüğü bilinmediği halde
+# candidate_priority onu scaleup bandında sayar. Her adres 2026-10-03'te yerelde
+# harvest_links ile denendi; sondaki sayı o gün dönen domain sayısıdır. 90 küsur aday
+# denendi, listeyi JavaScript ile yükleyenler (0 ya da yalnızca CDN domaini dönenler) alınmadı.
+SCALEUP_DIRECTORIES = [
+    ("https://topstartups.io/", "TopStartups (fonlanmış, işe alan)"),                 # 21
+    ("https://topstartups.io/?funding_round=Series+A", "TopStartups Seri A"),         # 21
+    ("https://topstartups.io/?funding_round=Series+B", "TopStartups Seri B"),         # 19
+    ("https://www.picuscap.com/portfolio", "Picus Capital portföy (global)"),         # 114
+    ("https://www.kfund.co/en/portfolio", "K Fund portföy (İspanya)"),                # 104
+    ("https://www.kaya.vc/portfolio", "Kaya VC portföy (Orta Avrupa)"),               # 55
+    ("https://www.capnamic.com/portfolio", "Capnamic portföy (Almanya)"),             # 48
+    ("https://www.pauaventures.com/portfolio", "Paua Ventures portföy (Berlin)"),     # 37
+    ("https://www.b2venture.vc/portfolio", "b2venture portföy (DACH)"),               # 24
+    ("https://www.octopusventures.com/portfolio/", "Octopus Ventures portföy (UK)"),  # 21
+    ("https://www.collectivespark.com/portfolio", "Collective Spark portföy (Türkiye)"),  # 20
+    ("https://www.visionariesclub.vc/portfolio", "Visionaries Club portföy (Berlin)"),    # 16
 ]
 
 
@@ -378,11 +399,16 @@ def candidate_priority(domain: str, c: dict, band: tuple = SCALEUP_BAND) -> tupl
     bandın altındaki ekipler (banda yakın olan önce), sonra bandın biraz üstü, sonra ekibi
     bilinmeyenler, en sonda çok büyük şirketler: onların genel adresine giden soğuk mail
     okunmaz, ilanları ATS özetinden gelir. Eskiden en küçük ekip en öndeydi; bir ve iki
-    kişilik şirketler sırayı dolduruyor, büyüyen şirketlere sıra gelmiyordu."""
+    kişilik şirketler sırayı dolduruyor, büyüyen şirketlere sıra gelmiyordu.
+
+    `olcek` işaretli aday (SCALEUP_DIRECTORIES) işe alan sayılır. Ekibi bilinmiyorsa banda
+    alan adından türeyen sabit bir yerle yayılır: ekibi bilinen adayların arasına karışır,
+    hepsi birden sıranın başına ya da sonuna yığılmaz."""
     lo, hi = band
     ekip = c.get("ekip")
+    olcek = bool(c.get("olcek"))
     if not isinstance(ekip, int) or ekip <= 0:
-        kademe, ic = 3, 0
+        kademe, ic = (0, lo + zlib.crc32(domain.encode()) % (hi - lo + 1)) if olcek else (3, 0)
     elif lo <= ekip <= hi:
         kademe, ic = 0, ekip
     elif ekip < lo:
@@ -391,7 +417,7 @@ def candidate_priority(domain: str, c: dict, band: tuple = SCALEUP_BAND) -> tupl
         kademe, ic = 2, ekip
     else:
         kademe, ic = 4, ekip
-    return (0 if c.get("ise_aliyor") else 1, kademe, ic, domain)
+    return (0 if c.get("ise_aliyor") or olcek else 1, kademe, ic, domain)
 
 
 # ---------------------------------------------------------------- e-posta doğrulama
@@ -488,14 +514,19 @@ def domain_of(url: str) -> str:
     return h[4:] if h.startswith("www.") else h
 
 
+INVESTOR_TLDS = (".vc", ".ventures")
+
+
 def is_noise(d: str) -> bool:
     if not d or d.startswith(ASSET_PREFIXES):
         return True
     return any(n in d for n in NOISE)
 
 
-def harvest_links(url: str, label: str, cands: dict[str, dict], cap: int = 150) -> int:
+def harvest_links(url: str, label: str, cands: dict[str, dict], cap: int = 150,
+                  olcek: bool = False) -> int:
     """Bir dizin/portföy sayfasındaki dış şirket linklerini aday havuzuna ekler.
+    olcek=True: kaynak bir büyüme aşaması listesi, adaylar `olcek` işaretiyle eklenir.
 
     Bazı dizinler (ör. KWORKS) GitHub Actions IP'lerinden yavaş/kararsız yanıt
     veriyor — yerelde 44 domain dönen sayfa CI'da 0 dönebiliyor. Bu yüzden
@@ -514,10 +545,16 @@ def harvest_links(url: str, label: str, cands: dict[str, dict], cap: int = 150) 
         return 0
     html = raw.decode("utf-8", errors="replace")
     added = 0
+    # Dizinin kendi yan siteleri (blog, yatırımcı portalı) ve ortak yatırımcılar şirket değildir.
+    kok = domain_of(url).split(".")[0][:7]
     for href in re.findall(r'href=["\'](https?://[^"\'>\s]+)', html)[:cap]:
         hd = domain_of(href)
+        if hd.endswith(INVESTOR_TLDS) or (len(kok) >= 4 and kok in hd):
+            continue
         if hd and not is_noise(hd) and hd not in cands and domain_of(url) != hd:
             cands[hd] = {"domain": hd, "kaynak": label, "baslik": "", "ozet": ""}
+            if olcek:
+                cands[hd]["olcek"] = True
             added += 1
     return added
 
@@ -546,7 +583,8 @@ def gather_candidates(queries: list[str], log: list[str]) -> dict[str, dict]:
                     cands[dom] = {"domain": dom, "kaynak": x.get("kaynak", "havuz"),
                                   "baslik": "", "ozet": x.get("aciklama", ""),
                                   "ise_aliyor": x.get("ise_aliyor", False),
-                                  "ekip": x.get("ekip"), "ulke": x.get("ulke", "??")}
+                                  "ekip": x.get("ekip"), "ulke": x.get("ulke", "??"),
+                                  "olcek": bool(x.get("olcek"))}
             log.append(f"**Havuz** (`candidate_pool.json`, güncellendi "
                        f"{data.get('guncellendi','?')}): {len(cands)} domain\n")
         except (json.JSONDecodeError, OSError) as e:
@@ -556,10 +594,11 @@ def gather_candidates(queries: list[str], log: list[str]) -> dict[str, dict]:
 
     # 2) Dizinleri canlı çekmeyi yine de dene (CI'dan çoğu engelli, yerelde çalışır)
     log.append("**Dizin sayfaları (canlı):**\n")
-    for url, label in SEED_DIRECTORIES:
-        n = harvest_links(url, label, cands)
-        log.append(f"  {label} → {n} yeni domain")
-        time.sleep(0.4)
+    for dizinler, olcek in ((SEED_DIRECTORIES, False), (SCALEUP_DIRECTORIES, True)):
+        for url, label in dizinler:
+            n = harvest_links(url, label, cands, olcek=olcek)
+            log.append(f"  {label} → {n} yeni domain")
+            time.sleep(0.4)
 
     log.append("\n**Arama sorguları (ikincil):**\n")
     for q in queries:
@@ -1761,10 +1800,26 @@ def _self_test() -> int:
     assert _band("20,300") == (20, 300) and _band("x") == (20, 300) and _band("9,3") == (20, 300)
     havuz_ = {"scale.io": {"ekip": 80, "ise_aliyor": True}, "tek.io": {"ekip": 1, "ise_aliyor": True},
               "orta.io": {"ekip": 15, "ise_aliyor": True}, "dev.io": {"ekip": 9000, "ise_aliyor": True},
-              "bilinmez.io": {"ise_aliyor": True}, "almiyor.io": {"ekip": 80}}
+              "bilinmez.io": {"ise_aliyor": True}, "almiyor.io": {"ekip": 80},
+              "fonlu.io": {"olcek": True}}
     sira = [d for d, _ in sorted(havuz_.items(),
                                  key=lambda kv: candidate_priority(kv[0], kv[1], (20, 300)))]
-    assert sira == ["scale.io", "orta.io", "tek.io", "bilinmez.io", "dev.io", "almiyor.io"], sira
+    # fonlu.io: ekibi bilinmiyor ama büyüme listesinden geldi → bantta, küçük ekiplerden önce
+    assert sira.index("fonlu.io") < 2 and sira[2:] == [
+        "orta.io", "tek.io", "bilinmez.io", "dev.io", "almiyor.io"], sira
+    assert candidate_priority("fonlu.io", {"olcek": True})[:2] == (0, 0)
+    assert 20 <= candidate_priority("fonlu.io", {"olcek": True}, (20, 300))[2] <= 300
+    hasat_: dict = {}
+    global _get
+    gercek_get = _get  # noqa: N806
+    try:
+        _get = lambda *a, **k: (b'<a href="https://www.acme.io/x">a</a>'  # noqa: E731
+                                b'<a href="https://ortak.vc/">b</a>'
+                                b'<a href="https://portal.fonumuzinvest.com/">c</a>')
+        assert harvest_links("https://fonumuz.example/p", "vc", hasat_, olcek=True) == 1
+    finally:
+        _get = gercek_get
+    assert hasat_["acme.io"]["olcek"] is True
 
     # --- Serper cevabı doğru ayrıştırılıyor mu (ağa çıkmadan) ---
     # CSE'den geçerken sessizce yanlış alan adı okumak, aramanın haftalarca
