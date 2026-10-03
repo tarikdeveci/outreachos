@@ -1404,6 +1404,7 @@ def main() -> int:
     # ~35 dakika sürüyordu, aynı sürede 30 taslak çıkarmanın tek yolu bu.
     lock = threading.Lock()
     dur = threading.Event()
+    yer = [0]                # ayrılan taslak yeri: paralel işçiler hedefi aşmasın
 
     def isle(d: str, c: dict) -> None:
         if dur.is_set():
@@ -1454,6 +1455,10 @@ def main() -> int:
                 skipped.append((d, "pipeline: " + "; ".join(decision.get("reasons", []))[:120]))
             return
 
+        with lock:
+            if yer[0] >= run_target:           # başka işçi son yeri aldı; aday yarına kalır
+                return
+            yer[0] += 1
         draft_id = None
         if token and not DRY_RUN:
             draft_id = create_draft(email, verdict.get("konu", ""), verdict.get("govde", ""), token)
