@@ -15,6 +15,9 @@ gunluk_ozet/
 run_summary.md
 candidate_pool.json
 
+# Oturum devir notları: şirket adları ve kişisel run verisi içerir.
+docs/handoff/
+
 # --- Python ---
 __pycache__/
 *.pyc

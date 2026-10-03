@@ -12,14 +12,19 @@ Sıfır bağımlılık — sadece **Python 3** (stdlib). `npm install` / `pip in
 > adım adım kurulum sırası orada.
 
 **Öne çıkan tasarım kararları** (ayrıntı: ARCHITECTURE.md)
-- **Şirketlere otomatik mail yok** — outreach taslakta kalır, gönderme kararı insanda.
+- **Gönderim varsayılan olarak kapalı**: outreach taslakta kalır, gönderme kararı insanda.
+  İsteyen veto pencereli gönderimi (`AUTO_SEND`) ve otomatik onarımı (`AUTO_REPAIR`) açıp
+  sistemi insan müdahalesi olmadan çalıştırır (§8).
 - **Üç ayrı LLM adımı** (ele → yaz → *bağımsız* denetle) + deterministik sayı kontrolü;
   tek çağrıya "yaz ve kendini denetle" demek çalışmıyor.
 - **E-posta tahmin edilmez** — adres sitede birebir geçmeli **ve** MX doğrulanmalı.
 - **Teslim edilebilirlik guard'ı** — bounce oranı ölçülür; %6'yı aşarsa veya bekleyen
   taslak 12'yi geçerse yeni outreach otomatik durur.
-- **Bekleyen taslak triyajı** — her run mükerrer + içerik denetimi yapıp "gönder / sil /
-  düzelt" listesi çıkarır.
+- **Bekleyen taslak triyajı**: her run mükerrer + içerik denetimi yapıp "gönder / sil /
+  düzelt" listesi çıkarır; `AUTO_REPAIR` açıksa düzeltilecekleri kendisi onarır.
+
+> 🚀 **Sıfırdan kendi kurulumunuz için: [SETUP.md](SETUP.md)** (fork, private veri reposu,
+> secret'lar, ilk deneme run'ı, otomasyon anahtarları).
 
 Tek doğruluk kaynağı: `tracker.db` (SQLite). `outreach_log.csv` insan-okunur yedek olarak otomatik senkronlanır.
 
@@ -39,7 +44,7 @@ Sonra tarayıcıda: **http://localhost:8787**
 
 > Farklı port: `DASHBOARD_PORT=9000 python src/app.py`
 
-İlk açılışta bugüne kadar loglanan **67 şirket** dashboard'da görünür.
+İlk açılışta o güne kadar loglanan şirketler dashboard'da görünür.
 
 ---
 
@@ -61,12 +66,14 @@ outreachos/
 │   ├── drafting.py         # judge / draft / verify (3 ayrı LLM çağrısı)
 │   ├── deliverability.py   # bounce ölçümü + eşikler + devre kesici
 │   ├── audit_drafts.py     # bekleyen taslak triyajı
+│   ├── repair.py           # ⚠️ taslakları onarır, onarılamayanı siler (varsayılan KAPALI)
 │   ├── autosend.py         # veto pencereli gönderim (varsayılan KAPALI)
 │   ├── report.py           # günlük rapor + ATS digest
 │   ├── refresh_pool.py     # aday havuzunu tazeler
 │   └── get_gmail_token.py  # Gmail refresh token → GitHub secret
 ├── web/index.html          # dashboard arayüzü (Tailwind + Chart.js CDN)
 ├── state.example.json      # profil şablonu — kopyalayıp doldurun
+├── SETUP.md                # sıfırdan kurulum rehberi
 └── .github/workflows/daily.example.yml   # cron şablonu (veri reponuza kopyalayın)
 ```
 
@@ -86,6 +93,8 @@ Motorun saf mantık modülleri ağsız kendi kendini test eder:
 ```bash
 python scripts/deliverability.py
 python scripts/audit_drafts.py
+python scripts/drafting.py
+python scripts/repair.py
 python scripts/autosend.py
 python scripts/report.py
 python scripts/discover.py --self-test
@@ -144,18 +153,18 @@ export SEARCH_PROVIDER=serper && export SEARCH_API_KEY="..."   # Serper.dev (ser
 
 > Google Custom Search JSON API'yi **kullanma**: yeni müşterilere kapalı (her çağrı
 > 403 döner) ve 2027-01-01'de tamamen kapanıyor. Bing Search API de emekliye ayrıldı.
-> Bulut ajanı (`outreachos-data`) Serper kullanıyor; ayrıntı için `SETUP.md`.
+> Bulut ajanı (günlük cron) Serper kullanıyor; ayrıntı için [SETUP.md](SETUP.md).
 Windows PowerShell: `$env:SEARCH_API_KEY="..."`
 
-> Anahtar yoksa keşif atlanır; dashboard ve mevcut 67 şirket sorunsuz çalışır.
+> Anahtar yoksa keşif atlanır; dashboard ve mevcut kayıtlar sorunsuz çalışır.
 
 ### 6b. Gmail API (taslak oluşturma + yanıt takibi + kendine rapor)
-Şirketlere **otomatik gönderim YOKTUR** — şirket outreach'i yalnızca `drafts.create` (taslak), gönderme kararı her zaman sende. Tek istisna: günlük özet **senin kendi adresine** rapor olarak gönderilir (`gmail.send`, hedef bağlı hesabın kendi adresi değilse reddedilir).
+Şirketlere gönderim **varsayılan olarak kapalıdır**: outreach yalnızca `drafts.create` ile taslak olur, gönderme kararı sende. `gmail.send` iki yerde kullanılır: (1) günlük özet **senin kendi adresine** rapor olarak gider (hedef bağlı hesabın kendi adresi değilse reddedilir); (2) `AUTO_SEND=1` yaparsan, denetimden ✅ geçen taslaklar bir günlük veto penceresinden sonra şirketlere gönderilir (§8).
 
 1. [Google Cloud Console](https://console.cloud.google.com/) → yeni proje → **Gmail API**'yi etkinleştir.
 2. **OAuth consent screen** → External → kendi Gmail'ini test kullanıcısı ekle.
 3. **Credentials → OAuth client ID → Desktop app** → `credentials.json` indir, proje köküne koy.
-4. Kapsam (scope): `gmail.compose` (taslak) + `gmail.readonly` (yanıt takibi) + `gmail.send` (yalnızca kendine günlük rapor). Daha önce bağladıysan send yeni scope olduğu için Gmail'i **yeniden bağla**.
+4. Kapsam (scope): `gmail.compose` (taslak) + `gmail.readonly` (yanıt takibi) + `gmail.send` (kendine günlük rapor; `AUTO_SEND=1` ise onaylı taslakların gönderimi). Daha önce bağladıysan send yeni scope olduğu için Gmail'i **yeniden bağla**.
 5. İlk çalıştırmada tarayıcıda onay verirsin; token `token.json`'a kaydolur.
 
 > `credentials.json` ve `token.json` **asla commit edilmez** (gizli). CAPTCHA'lı formlar otomatik geçilmez — sana bırakılır.
@@ -164,7 +173,10 @@ Windows PowerShell: `$env:SEARCH_API_KEY="..."`
 
 ## 7. Güvenlik Kuralları (değiştirilemez)
 
-- ❌ **Şirketlere** otomatik gönderim yok — outreach sadece taslak. ✅ Tek istisna: günlük rapor yalnızca **senin kendi adresine** gider (`send_self_report`, dış adrese asla).
+- ❌ **Şirketlere** gönderim varsayılan olarak kapalı: outreach sadece taslak. ✅ Günlük rapor yalnızca **senin kendi adresine** gider (`send_self_report`, dış adrese asla).
+- ⚙️ `AUTO_SEND=1` bilinçli bir tercihtir ve kendi zinciri vardır: yalnızca içerik denetiminden ✅ geçmiş, bir gün veto penceresinde beklemiş ve MX'i yeniden doğrulanmış taslak gönderilir; günlük sert tavan uygulanır.
+- ⚙️ `AUTO_REPAIR_DELETE=1` taslakları **kalıcı** siler (çöp kutusu yok). Sadece onarılamayan ve mükerrer taslaklar için; kapalıyken motor hiçbir taslağı silmez.
+- ✅ Motor yalnızca **kendi açtığı** taslaklara dokunur: Gmail'de elle yazdığın taslaklar onarılmaz, silinmez, gönderilmez (raporda "motorun kaydında yok" diye sayılır).
 - ❌ CAPTCHA otomatik geçilmez; LinkedIn'de otomatik mesaj atılmaz (hazır arama linki verilir, mesajı sen atarsın).
 - ❌ Kişisel tanıdık şirketleri (`excluded_companies_seed_personal`) pipeline'a girmez — Kişisel/Bekleyen sekmesinde manuel karar bekler.
 - ✅ `daily_caps` config'den açılıp kapanabilir; varsayılan **açık** (Genel Bakış'taki "aktif" anahtarı).
@@ -191,18 +203,31 @@ Bounce alan adres `email_dead` işaretlenir, o domain bir daha denenmez. Küçü
 uygulanmaz** (fail-open).
 
 **Bekleyen taslak triyajı:** her run taslakları ✅ gönder / 🔁 sil (mükerrer) / ⚠️ düzelt /
-👀 elle bak diye etiketleyip rapora yazar. Kararlar gövde hash'iyle cache'lenir.
+👀 elle bak diye etiketleyip rapora yazar. Kararlar gövde, profil ve denetim kurallarının
+hash'iyle cache'lenir; kurallar değişince eski kararlar kendiliğinden tazelenir.
 
-**Opsiyonel — veto pencereli otomatik gönderim** (`AUTO_SEND=1`, varsayılan **kapalı**):
+**Opsiyonel: otomatik onarım** (`AUTO_REPAIR=1`, varsayılan **kapalı**): ⚠️ damgalı
+taslaktaki desteklenmeyen iddiayı çıkarır, Gmail'in sarmaladığı linkleri açar ve sonucu
+yeniden denetimden geçirir (en fazla iki tur, run başına `REPAIR_MAX` taslak). Onarılan
+taslak ✅ sayılır ve `AUTO_SEND` açıksa ertesi gün gönderim kuyruğuna girer. `AUTO_REPAIR_DELETE=1` ayrıca iki turda
+onarılamayan taslağı ve Gönderilenler'de karşılığı olan mükerreri **kalıcı siler** (geri
+alınamaz); kapalıyken bunlar raporda "onarılamadı, elle düzelt" diye listelenir.
+
+**Opsiyonel: veto pencereli otomatik gönderim** (`AUTO_SEND=1`, varsayılan **kapalı**):
 denetimden ✅ geçen taslak bir gün kuyrukta bekler, raporda listelenir; **istemediğini
 Gmail'den silersen gitmez**. Gönderimden hemen önce MX yeniden doğrulanır ve günlük
-sert tavan (varsayılan 5) uygulanır.
+sert tavan (`AUTO_SEND_CAP`, varsayılan 5) uygulanır.
+
+Üçü birlikte açıkken döngü kendi kendine döner: denetle → onar → gönder → yeni taslak üret.
+Kapalıyken bekleyen taslak 12'yi geçtiğinde üretim durur ve taslakları elle göndermen gerekir.
 
 Bütün guard modülleri ağsız self-test içerir:
 
 ```bash
 python scripts/deliverability.py
 python scripts/audit_drafts.py
+python scripts/drafting.py
+python scripts/repair.py
 python scripts/autosend.py
 python scripts/report.py
 python scripts/discover.py --self-test

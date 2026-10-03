@@ -7,6 +7,9 @@ Taslak üretimi ve halüsinasyon denetimi.
   2. draft()   — taslak metnini yaz (Sonnet, sadece elemeden geçenler için)
   3. verify()  — "bu metindeki her iddia profilde var mı" (Sonnet, bağımsız göz)
 
+Dördüncü adım sonradan eklendi: repair() denetimden kalan BEKLEYEN bir taslağı en az
+değişiklikle düzeltir, sonucu yine verify() denetler (repair_and_verify).
+
 3. adım neden ayrı: yazan modele "uydurma" demek yetmedi. Gerçek bir vakada
 Haiku, profilde hiç olmayan "fizyoterapi platformunda ürün geliştirdim" cümlesini
 kurdu ve mail gerçek bir şirkete gitti. Aynı çağrı içinde kendi çıktısını
@@ -15,6 +18,7 @@ profille karşılaştır" işine odaklanınca bunu yakalıyor.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -216,6 +220,78 @@ def numeric_check(body: str, profile: dict) -> str | None:
     return None
 
 
+def rules_version() -> str:
+    """Denetim kurallarının parmak izi (audit cache anahtarına girer).
+
+    Elle artırılan bir sürüm numarası unutulur; kuralın kendisinden türetilen hash
+    unutulamaz. Doğrulama prompt'u, sayı kalıbı, URL kalıbı ya da beyaz liste
+    değiştiği anda eski kararlar kendiliğinden geçersiz olur."""
+    blob = "|".join([VERIFY_SYSTEM, NUM_RE.pattern, URL_RE.pattern,
+                     ",".join(sorted(NUM_WHITELIST))])
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:8]
+
+
+# ---------------------------------------------------------------- 4) onarım
+REPAIR_SYSTEM = (
+    "Bir iş başvurusu maili, başvuranın profiline karşı yapılan denetimden geçemedi. "
+    "Tek işin: maili EN AZ değişiklikle düzeltmek.\n\n"
+    "- Listelenen her sorunlu iddiayı profildeki gerçeğe çevir. Profilde karşılığı "
+    "yoksa o ifadeyi ya da cümleyi çıkar.\n"
+    "- YENİ iddia, sayı, teknoloji, proje, unvan EKLEME. Sorunlu olmayan cümlelere dokunma.\n"
+    "- Dili, tonu, hitabı, kapanışı ve imzayı koru. Mail yine akıcı ve bütün okunmalı; "
+    "çıkarılan cümlenin bıraktığı boşluk hissedilmesin.\n"
+    "- Linkleri olduğu gibi, düz metin bırak.\n"
+    "- Bugünün tarihi veriliyor: bitmiş işler geçmiş zamanla yazılır.\n\n"
+    'SADECE şu JSON: {"govde": "..."}'
+)
+
+
+def repair(body: str, problems: list, profile: dict, today: str) -> dict | None:
+    user = (f"BUGÜNÜN TARİHİ: {today}\n\n"
+            f"--- BAŞVURAN PROFİLİ (tek gerçek kaynak) ---\n"
+            f"{json.dumps(profile, ensure_ascii=False)}\n\n"
+            f"--- DENETİMİN BULDUĞU SORUNLAR ---\n"
+            + "\n".join(f"- {p}" for p in problems)
+            + f"\n\n--- MAİL METNİ ---\n{body}")
+    return _call(DRAFT_MODEL, REPAIR_SYSTEM, user, max_tokens=4000)
+
+
+def repair_and_verify(body: str, problems: list, profile: dict, today: str,
+                      rounds: int = 2, repair_fn=None, verify_fn=None) -> tuple:
+    """(yeni_govde | None, sebep, sayilir).
+
+    `sayilir` False ise başarısızlık İÇERİK kaynaklı değil (model cevap vermedi, kota,
+    ağ): çağıran bunu "onarılamadı" diye kaydetmemeli, yoksa bir altyapı arızası
+    taslakları kalıcı olarak onarılamaz damgalar (ve silme açıksa siler).
+
+    İkinci tur ilk onarımın çıktısı üzerinden, kalan sorunlarla yapılır. Onarılan metin
+    yazılan metinle aynı denetimden geçer: numeric_check + verify. Denetimi geçmeyen
+    hiçbir metin dönmez."""
+    repair_fn, verify_fn = repair_fn or repair, verify_fn or verify
+    sorunlar, metin = [str(p) for p in problems], body
+    for _ in range(rounds):
+        r = repair_fn(metin, sorunlar, profile, today)
+        # govde string değilse (null, liste) cevap bozuktur: str(None) "None" verir, kısalık
+        # kontrolüne takılır ve içerik hatası sayılıp silmeye kadar giderdi.
+        govde = (r or {}).get("govde")
+        yeni = govde.strip() if isinstance(govde, str) else ""
+        if not yeni:
+            return None, "onarım adımı cevap vermedi", False
+        # Model "sorunlu cümleyi çıkar" talimatını mailin yarısını silerek yerine
+        # getirirse elde gönderilecek bir mail kalmaz; bunu onarım sayma.
+        if len(yeni) < len(body) * 0.5:
+            return None, "onarım metni yarıdan fazla kısalttı", True
+        sayi = numeric_check(yeni, profile)
+        v = verify_fn(yeni, profile)
+        if v is None:
+            return None, "doğrulama adımı cevap vermedi", False
+        if v.get("temiz") and not sayi:
+            return yeni, "", True
+        sorunlar = [str(x) for x in v.get("sorunlar", [])] + ([sayi] if sayi else [])
+        metin = yeni
+    return None, "; ".join(sorunlar)[:300], True
+
+
 def judge_draft_verify(company: dict, site_text: str, profile: dict,
                        today: str) -> tuple[dict | None, str]:
     """(taslak, sebep) — taslak None ise sebep neden elendiğini söyler."""
@@ -247,3 +323,49 @@ def judge_draft_verify(company: dict, site_text: str, profile: dict,
         else:
             return None, f"HALÜSİNASYON — {sorunlar}"
     return None, "taslak doğrulanamadı"
+
+
+# --------------------------------------------------------------------- self-test
+if __name__ == "__main__":
+    prof = {"projeler": ["Acme Panel"], "metrik": "ortalama 0.56"}
+    assert numeric_check("skor 0.56 oldu", prof) is None
+    assert numeric_check("150K+ kullanıcı", prof) is not None
+    # URL içindeki sayı iddia değildir
+    assert numeric_check("bkz https://x.io/url?ust=1790242035715000&sa=E", prof) is None
+
+    assert rules_version() == rules_version() and len(rules_version()) == 8
+
+    temiz, kirli = {"temiz": True, "sorunlar": []}, {"temiz": False, "sorunlar": ["uydurma"]}
+    govde = "Merhaba, Acme Panel projesini kurdum. Fizyoterapi platformu geliştirdim. Selamlar."
+
+    # 1. turda düzelir
+    y, sebep, say = repair_and_verify(
+        govde, ["uydurma"], prof, "2026-10-02",
+        repair_fn=lambda b, p, pr, t: {"govde": b.replace(" Fizyoterapi platformu geliştirdim.", "")},
+        verify_fn=lambda b, pr: kirli if "Fizyoterapi" in b else temiz)
+    assert y and "Fizyoterapi" not in y and sebep == "" and say, (y, sebep, say)
+
+    # 2 turda da düzelmez → içerik başarısızlığı (sayılır)
+    y, sebep, say = repair_and_verify(govde, ["uydurma"], prof, "2026-10-02",
+                                      repair_fn=lambda b, p, pr, t: {"govde": b},
+                                      verify_fn=lambda b, pr: kirli)
+    assert y is None and "uydurma" in sebep and say
+
+    # model cevap vermedi / doğrulama cevap vermedi → altyapı, SAYILMAZ
+    assert repair_and_verify(govde, [], prof, "t", repair_fn=lambda *a: None,
+                             verify_fn=lambda b, pr: temiz)[2] is False
+    assert repair_and_verify(govde, [], prof, "t", repair_fn=lambda b, *a: {"govde": b},
+                             verify_fn=lambda b, pr: None)[2] is False
+
+    # maili yarıdan fazla kısaltan "onarım" kabul edilmez
+    y, sebep, say = repair_and_verify(govde, [], prof, "t",
+                                      repair_fn=lambda *a: {"govde": "Merhaba."},
+                                      verify_fn=lambda b, pr: temiz)
+    assert y is None and "kısalttı" in sebep and say
+
+    # onarım yeni bir sayı uydurursa deterministik kat yakalar
+    y, _s, say = repair_and_verify(govde, [], prof, "t",
+                                   repair_fn=lambda b, *a: {"govde": b + " 9000 kullanıcı."},
+                                   verify_fn=lambda b, pr: temiz)
+    assert y is None and say
+    print("drafting self-test: OK")

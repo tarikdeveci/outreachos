@@ -75,8 +75,9 @@ flowchart TD
     E --> F[LLM: ele → yaz → denetle]
     F --> H[Gmail'e TASLAK bırak]
     B3 --> I[Bekleyen taslak triyajı:<br/>mükerrer + içerik]
-    I --> J[Veto kuyruğu → ertesi gün gönder<br/>opsiyonel, varsayılan KAPALI]
-    STOP & H & I & J --> R[Günlük rapor:<br/>mail + GitHub issue + özet dosyası]
+    I --> K[Otomatik onarım: düzelt / sil<br/>opsiyonel, varsayılan KAPALI]
+    K --> J[Veto kuyruğu → ertesi gün gönder<br/>opsiyonel, varsayılan KAPALI]
+    STOP & H & I & K & J --> R[Günlük rapor:<br/>mail + GitHub issue + özet dosyası]
 ```
 
 ### 3.1 Keşif
@@ -202,9 +203,11 @@ zamanla kendi hedef listesini temizler.
 
 Bunlar "şimdilik böyle" değil, **mimarinin taşıyıcı kolonları**:
 
-1. **Şirketlere otomatik mail YOK.** Outreach varsayılan olarak taslakta kalır; gönderme
-   kararı insana aittir. (§7'deki opsiyonel kat bunu gevşetir — varsayılan kapalıdır ve
-   kendi zinciri vardır.)
+1. **Şirketlere gönderim varsayılan olarak KAPALI.** Outreach taslakta kalır; gönderme
+   kararı insana aittir. §7'deki opsiyonel kat bunu bilinçli bir tercihle gevşetir:
+   kendi zinciri vardır (denetim, veto penceresi, bounce guard, MX, günlük tavan) ve
+   denetimden geçmemiş hiçbir taslak gönderilmez. Aynı şekilde motor varsayılan olarak
+   hiçbir taslağı silmez; silme yalnızca §8'deki `AUTO_REPAIR_DELETE` ile açılır.
 2. **Kişiye özel adres tahmin edilmez.** Sadece sitede birebir geçen genel kutular.
 3. **Rapor maili yalnızca kullanıcının kendi adresine.** Hedef adres, bağlı hesabın kendi
    adresiyle eşleşmezse gönderim **reddedilir** — yanlışlıkla dışarı mail atmaya karşı kilit.
@@ -249,9 +252,52 @@ Her run, Gmail'deki bekleyen taslakları denetleyip dört karardan biriyle etike
 | 👀 **ELLE BAK** | Otomatik doğrulanamadı — güvenli varsayılmaz |
 | ⏳ **SIRADA** | Run'ın LLM kotası doldu, sonraki run'da |
 
-Maliyet kontrolü: karar, taslak gövdesinin **hash'iyle cache'lenir** (gövde değişmediyse
-tekrar LLM çağrılmaz) ve run başına yeni doğrulama sayısı sınırlıdır. Mükerrer tespiti
-LLM gerektirmez, o yüzden bedavadır ve **önce** çalışır.
+Maliyet kontrolü: karar, **gövde + profil + denetim kurallarının sürümü** hash'iyle
+cache'lenir (üçü de değişmediyse tekrar LLM çağrılmaz) ve run başına yeni doğrulama sayısı
+sınırlıdır (`AUDIT_MAX_VERIFY`). Kural sürümü anahtarda olduğu için denetim prompt'u
+değişince eski kararlar kendiliğinden geçersiz olur; yoksa eski kurala göre "temiz" çıkmış
+taslak sonsuza kadar temiz kalırdı. Gönderim kuyruğundaki taslaklar önce denetlenir.
+Mükerrer tespiti LLM gerektirmez, o yüzden bedavadır ve **önce** çalışır.
+
+### 8.1 Opsiyonel: otomatik onarım (`AUTO_REPAIR`, varsayılan KAPALI)
+
+Triyaj tek başına bir **kilit** üretir: ⚠️ DÜZELT damgalı taslakları onaran yoksa birikir,
+bekleyen sayısı guard eşiğini geçer ve yeni üretim durur. Onarım katı bu halkayı kapatır:
+
+```
+⚠️ DÜZELT  →  onar (LLM, en fazla 2 tur)  →  sayı kontrolü + bağımsız verify  →  ✅  →  veto kuyruğu
+```
+
+- **Onarım da denetimden geçer.** Onaran model ile denetleyen model ayrı çağrılardır;
+  onarılmış metin §4'teki aynı kapıdan geçmeden ✅ sayılmaz.
+- **Maili yarıdan fazla kısaltan onarım reddedilir.** "Şüpheli her cümleyi sil" kolay
+  yoldur ama geriye gönderilmeye değmeyen bir mail bırakır.
+- **Altyapı hatası "onarılamadı" sayılmaz.** API zaman aşımı yüzünden bir taslak silinmesin.
+- **Sarmalanmış linkler açılır.** Gmail arayüzünde elle düzenlenen taslakta linkler
+  `google.com/url?q=...` sarmalayıcısına dönüşebilir; bu LLM gerektirmeyen bir düzeltmedir.
+- **Taslak yerinde güncellenir** (raw MIME, `text/plain`, id değişmez): veto kuyruğu ve
+  denetim cache'i id üzerinden çalıştığı için yeni taslak açmak ikisini de bozardı.
+- `REPAIR_MAX` run başına LLM maliyetini sınırlar; onarılamayan taslak gövde hash'iyle
+  kaydedilir, gövde değişmedikçe aynı taslağa tekrar LLM harcanmaz.
+
+**Silme ayrı bir anahtardır** (`AUTO_REPAIR_DELETE`, varsayılan KAPALI) çünkü geri
+alınamaz: iki turda onarılamayan taslak ve Gönderilenler'de karşılığı olan mükerrer
+**kalıcı** silinir. Kapalıyken bunlar raporda "onarılamadı" diye listelenir ve insan karar
+verir. Silinen onarılamayan taslağın firması, taslak Gönderilenler taramasının ulaştığı
+tarih aralığındaysa aday havuzuna geri döner (yeni bir taslak şansı); mükerrerin firması
+dönmez (zaten mail gitmiş).
+
+**Sahiplik filtresi:** onarım, silme ve otomatik gönderim yalnızca motorun kendi açtığı
+taslaklara dokunur (`companies_already_contacted` içinde `draft_id`'si kayıtlı olanlar).
+Taslaklar klasöründe kullanıcının elle yazdığı mailler de durur; filtre olmasa yazışılmış
+bir firmaya hazırlanan yanıt taslağı "mükerrer" diye silinir, yeni bir firmaya yazılan yarım
+taslak da ✅ çıkarsa ertesi gün gönderilirdi. Kaydı olmayan taslak sayısı raporda görünür;
+gönderim kuyruğuna önceden girmiş kayıtsız taslak gönderilmeden kuyruktan düşürülür.
+
+**Hayalet veto koruması:** veto "taslak Gmail'de yok" demektir, ama taslak listesi eksik
+okunduysa (hız limiti, ağ hatası) okunamayan taslak "silinmiş" görünür. Bu yüzden tarama
+eksikse kuyruktaki eksik id'ler Gmail'e tek tek sorulur ve yalnızca **404** dönen veto
+sayılır. Gmail okuma çağrıları üstel beklemeyle yeniden denenir (429, 5xx, ağ hatası).
 
 ---
 
@@ -321,6 +367,7 @@ scripts/discover.py       ana akış: keşif → doğrulama → taslak → guard
 scripts/drafting.py       judge / draft / verify + deterministik sayı denetimi
 scripts/deliverability.py bounce ölçümü + eşikler + devre kesici
 scripts/audit_drafts.py   bekleyen taslak triyajı (mükerrer + içerik)
+scripts/repair.py         otomatik onarım + silme kararları (varsayılan KAPALI)
 scripts/autosend.py       veto pencereli gönderim (varsayılan KAPALI)
 scripts/report.py         günlük rapor + ATS digest + LinkedIn hedefleri
 scripts/refresh_pool.py   aday havuzunu tazeler (elle çalıştırılır)

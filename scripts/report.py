@@ -1,6 +1,7 @@
 """Günlük self-report: ATS başvuru listesini toplar ve özeti kullanıcının KENDİ adresine yollar.
 
-Ayrım (güvenlik): şirketlere otomatik mail YOK — outreach yalnızca taslak kalır.
+Ayrım (güvenlik): bu modül şirketlere mail göndermez (o iş yalnızca AUTO_SEND=1 iken
+autosend zincirinindir).
 Buradaki `send_self_report` SADECE self-report içindir; hedef adres bağlı Gmail
 hesabının kendi adresiyle eşleşmezse gönderimi reddeder (own_address doğrulaması),
 yani profildeki kendi adresin dışına bir tek mail bile gitmez.
@@ -145,8 +146,10 @@ def build_report_text(day, profile, drafted, ats, reply_notes, skipped, banner_l
     name = profile.get("name", "")
     lines = [f"İş Arama Otomasyonu — Günlük Rapor ({day})", ""]
     lines.append(f"Merhaba {name.split()[0] if name else ''}, bugünkü tarama özeti aşağıda.")
-    lines.append("Bu mail KENDİ adresinden gönderildi; şirketlere hiçbir otomatik mail gitmedi —")
-    lines.append("outreach mailleri Gmail > Taslaklar'da senin onayını bekliyor.")
+    # AUTO_SEND / AUTO_REPAIR_DELETE açıkken "hiçbir mail gitmedi" demek yanlış olur;
+    # yapılanlar aşağıdaki bölümlerde tek tek listelenir.
+    lines.append("Bu rapor yalnızca KENDİ adresine gönderildi. Şirketlere giden, onarılan veya silinen")
+    lines.append("her taslak aşağıda listelenir; kalan outreach mailleri Gmail > Taslaklar'da bekliyor.")
     lines.append("")
 
     if banner_lines:

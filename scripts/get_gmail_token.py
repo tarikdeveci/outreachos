@@ -9,8 +9,9 @@ token otomatik olarak GitHub secret'a yazılır. Token ekranda GÖRÜNMEZ ve
 komut geçmişine düşmez.
 
 Scope: gmail.compose + gmail.readonly + gmail.send — taslak açar, gelen kutusunu
-okur ve YALNIZCA kendi adresine günlük rapor yollar. Şirketlere otomatik gönderim
-kodda engelli (send yalnızca self-report'ta; hedef adres bağlı hesapla eşleşmezse red).
+okur ve kendi adresine günlük rapor yollar (hedef adres bağlı hesapla eşleşmezse red).
+Şirketlere gönderim varsayılan olarak kapalıdır; yalnızca workflow'da AUTO_SEND=1
+yapılırsa denetimden geçmiş taslaklar gönderilir.
 """
 import os
 import http.server

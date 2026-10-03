@@ -108,9 +108,9 @@ Sonunda kısa bir özet ver: kaç aday bulundu, kaçı filtreden geçti, kaç Gm
 
 | Placeholder | Fill with | Example |
 |---|---|---|
-| `{{USER_NAME}}` | Profile owner's name | Tarık Deveci |
+| `{{USER_NAME}}` | Profile owner's name | Ada Yılmaz |
 | `{{REPO_NAME}}` | Directory name the code repo checks out as | outreachos |
-| `{{DRIVE_FOLDER_NAME}}` / `{{DRIVE_FOLDER_ID}}` | The seeded Drive folder | outreachos-data / 1rukZ... |
+| `{{DRIVE_FOLDER_NAME}}` / `{{DRIVE_FOLDER_ID}}` | The seeded Drive folder | outreachos-data / 1AbCd... |
 | `{{STATE_FILE_ID}}` / `{{LOG_FILE_ID}}` | Initial file IDs (routine will find newer ones itself) | |
 | `{{OPTIONAL_INDEED_CONNECTOR_LINE}}` | `, **Indeed** (iş arama için)` if an Indeed/job-search connector showed up in `mcp_connections`, else empty string | |
 | `{{OPTIONAL_INDEED_KEYWORD}}` | `, "indeed"` if the connector line above is non-empty, else empty | |

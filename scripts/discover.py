@@ -16,8 +16,9 @@ o yüzden bounce'lar okunup adres "ölü" işaretleniyor ve bir daha denenmiyor.
 Gmail izni `gmail.compose` + `gmail.readonly` + `gmail.send`: taslak yazar, gelen
 kutusunu okur (yanıt/bounce takibi) ve YALNIZCA kullanıcının KENDİ adresine günlük
 rapor yollar (report.send_self_report; hedef adres bağlı hesabın kendi adresiyle
-eşleşmezse gönderim reddedilir). ŞİRKETLERE otomatik gönderim YOK — şirket outreach'i
-her zaman sadece `create_draft` ile taslak kalır.
+eşleşmezse gönderim reddedilir). ŞİRKETLERE gönderim varsayılan olarak KAPALI: outreach
+`create_draft` ile taslak kalır. Yalnızca AUTO_SEND=1 iken, denetimden geçmiş ve veto
+penceresini doldurmuş taslaklar autosend zinciriyle gönderilir (send_draft).
 
 Env (GitHub Actions secrets):
   ANTHROPIC_API_KEY, SERPER_API_KEY,
@@ -77,6 +78,17 @@ AUDIT_MAX_VERIFY = int(os.environ.get("AUDIT_MAX_VERIFY", "20"))
 # hiçbir şirkete mail gitmez, kuyruk sadece raporda gösterilir.
 AUTO_SEND = os.environ.get("AUTO_SEND") == "1"
 AUTO_SEND_CAP = int(os.environ.get("AUTO_SEND_CAP", "5"))
+# Bekleyen taslakların otomatik onarımı (scripts/repair.py). Kod varsayılanı KAPALI:
+# repoyu fork eden biri hiçbir anahtar açmadan çalıştırdığında taslaklarına dokunulmaz.
+# Silme geri alınamaz olduğu için onarımdan ayrı, kendi anahtarıyla açılır.
+AUTO_REPAIR = os.environ.get("AUTO_REPAIR") == "1"
+AUTO_REPAIR_DELETE = os.environ.get("AUTO_REPAIR_DELETE") == "1"
+REPAIR_MAX = int(os.environ.get("REPAIR_MAX", "10"))
+# Gmail hız limiti (429 / 403 rateLimitExceeded) ve 5xx için yeniden deneme. Bekleme
+# run başına toplam bütçeyle sınırlı: 100 taslağın her biri 31 sn beklerse run biter.
+GMAIL_RETRY_WAITS = (1, 2, 4, 8, 16)
+GMAIL_RETRY_BUDGET_SEC = float(os.environ.get("GMAIL_RETRY_BUDGET_SEC", "240"))
+GMAIL_PAUSE_SEC = float(os.environ.get("GMAIL_PAUSE_SEC", "0.05"))
 _STARTED = time.monotonic()
 
 
@@ -199,8 +211,9 @@ def _get(url: str, headers: dict | None = None, timeout: int = 20) -> bytes | No
         return None
 
 
-def _post_json(url: str, payload: dict, headers: dict, timeout: int = 60) -> dict:
-    req = Request(url, data=json.dumps(payload).encode(), method="POST",
+def _post_json(url: str, payload: dict, headers: dict, timeout: int = 60,
+               method: str = "POST") -> dict:
+    req = Request(url, data=json.dumps(payload).encode(), method=method,
                   headers={"Content-Type": "application/json", **headers})
     with urlopen(req, timeout=timeout) as r:
         return json.load(r)
@@ -534,18 +547,132 @@ def google_access_token() -> str | None:
         return None
 
 
-def create_draft(to: str, subject: str, body: str, token: str) -> str | None:
+_gmail_waited = 0.0          # bu run'da yeniden deneme için beklenen toplam süre
+_gmail_err_logged = 0        # log'a basılan hata sayısı (ilk birkaçı yeter)
+
+
+def gmail_retryable(code: int, body: str) -> bool:
+    """Bu HTTP sonucu beklenip yeniden denenmeye değer mi. 403 ikiye ayrılır: hız limiti
+    (rateLimitExceeded / userRateLimitExceeded) geçicidir, yetki eksikliği kalıcıdır."""
+    if code == 0 or code == 429 or 500 <= code < 600:
+        return True
+    return code == 403 and "ratelimitexceeded" in body.lower()
+
+
+def gmail_fetch(url: str, token: str, timeout: int = 20, expect: tuple = (),
+                _open=urlopen, _sleep=time.sleep) -> tuple[int, bytes]:
+    """Gmail API GET → (http_kodu, gövde). 200 dışında gövde boştur; ağ hatasında kod 0.
+
+    `_get` her hatayı yutup None dönüyordu: 152 taslağın 108'i her run'da okunamadı ve
+    sebebin HTTP kodu log'a hiç düşmedi, yani teşhis edilemedi. Burada geçici hatalar
+    üstel beklemeyle yeniden denenir ve ilk birkaç hata kodu + gövdesiyle basılır.
+    `expect`: hata sayılmayan kodlar (ör. "taslak duruyor mu" sorusunda 404 bir cevaptır).
+    Okuma tavanı yok: `_get`in 400KB tavanı büyük bir taslağın JSON'unu ortasından keserdi."""
+    global _gmail_waited, _gmail_err_logged
+    req = Request(url, headers={"User-Agent": UA, "Authorization": "Bearer " + token})
+    code = 0
+    for wait in (*GMAIL_RETRY_WAITS, None):
+        if GMAIL_PAUSE_SEC:
+            _sleep(GMAIL_PAUSE_SEC)
+        retry_after = ""
+        try:
+            with _open(req, timeout=timeout) as r:
+                return 200, r.read()
+        except HTTPError as e:
+            code = e.code
+            retry_after = (e.headers.get("Retry-After") or "") if e.headers else ""
+            try:
+                detail = e.read().decode(errors="replace")[:200]
+            except (OSError, AttributeError):
+                detail = ""
+        except (URLError, TimeoutError, OSError) as e:
+            code, detail = 0, str(e)[:200]
+        if code in expect:
+            break
+        if _gmail_err_logged < 5:
+            _gmail_err_logged += 1
+            yol = url.split("?")[0].split("/users/me/")[-1]
+            print(f"  ! Gmail isteği başarısız ({yol}): HTTP {code or 'ağ hatası'} {' '.join(detail.split())}")
+        if wait is None or not gmail_retryable(code, detail):
+            break
+        if retry_after.isdigit():
+            wait = min(int(retry_after), 60)
+        if _gmail_waited + wait > GMAIL_RETRY_BUDGET_SEC:
+            break                         # bütçe bitti: kalan istekler beklemeden düşer
+        _gmail_waited += wait
+        _sleep(wait)
+    return code, b""
+
+
+def gmail_get(url: str, token: str) -> bytes | None:
+    code, body = gmail_fetch(url, token)
+    return body if code == 200 else None
+
+
+def draft_exists(draft_id: str, token: str) -> bool | None:
+    """Taslak Gmail'de duruyor mu: True / False (404) / None (cevap alınamadı).
+    None 'silinmiş' DEĞİLDİR; çağıran onu veto saymamalı."""
+    code, _ = gmail_fetch(f"https://gmail.googleapis.com/gmail/v1/users/me/drafts/{draft_id}"
+                          "?format=minimal", token, expect=(404,))
+    return True if code == 200 else (False if code == 404 else None)
+
+
+def confirmed_vetoes(queued_ids: set, live_ids: set, scan_complete: bool, exists_fn) -> set:
+    """Kuyruktayken kullanıcının sildiği (veto ettiği) taslakların id'leri.
+
+    Taslak taraması eksikse 'listede yok' ile 'silinmiş' aynı şey değildir: okunamayan
+    taslak da listede yoktur. O durumda her eksik id Gmail'e tek tek sorulur ve yalnızca
+    404 dönen veto sayılır. Eskiden eksik tarama onaylı taslakları 'sen sildin' diye
+    kuyruktan düşürüyor, günlük gönderim 5'ten 1'e iniyordu (2026-09-30 → 10-02)."""
+    missing = set(queued_ids) - set(live_ids)
+    if scan_complete:
+        return missing
+    return {i for i in missing if exists_fn(i) is False}
+
+
+def _draft_raw(to: str, subject: str, body: str) -> str:
     msg = EmailMessage()
     msg["To"], msg["Subject"] = to, subject
     msg.set_content(body)
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
+    return base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
+
+
+def create_draft(to: str, subject: str, body: str, token: str) -> str | None:
     try:
         d = _post_json("https://gmail.googleapis.com/gmail/v1/users/me/drafts",
-                       {"message": {"raw": raw}}, {"Authorization": "Bearer " + token})
+                       {"message": {"raw": _draft_raw(to, subject, body)}},
+                       {"Authorization": "Bearer " + token})
         return d.get("id")
     except (HTTPError, URLError, OSError) as e:
         print(f"    ! Taslak oluşturulamadı: {e}")
         return None
+
+
+def update_draft(draft_id: str, to: str, subject: str, body: str, token: str) -> bool:
+    """(gmail.compose) Taslağın içeriğini değiştirir; taslak id'si AYNI kalır, yani
+    state'teki draft_id ve gönderim kuyruğu kayıtları geçerliliğini korur. create_draft
+    ile aynı raw MIME yolu: sonuç text/plain olur ve Gmail linkleri sarmalamaz."""
+    try:
+        _post_json(f"https://gmail.googleapis.com/gmail/v1/users/me/drafts/{draft_id}",
+                   {"message": {"raw": _draft_raw(to, subject, body)}},
+                   {"Authorization": "Bearer " + token}, method="PUT")
+        return True
+    except (HTTPError, URLError, OSError) as e:
+        print(f"    ! Taslak güncellenemedi ({draft_id}): {e}")
+        return False
+
+
+def delete_draft(draft_id: str, token: str) -> bool:
+    """(gmail.compose) Taslağı KALICI olarak siler; çöp kutusuna gitmez, geri alınamaz.
+    Yalnızca AUTO_REPAIR_DELETE=1 iken repair.run üzerinden çağrılır."""
+    req = Request(f"https://gmail.googleapis.com/gmail/v1/users/me/drafts/{draft_id}",
+                  method="DELETE", headers={"Authorization": "Bearer " + token})
+    try:
+        with urlopen(req, timeout=30):
+            return True
+    except (HTTPError, URLError, OSError) as e:
+        print(f"    ! Taslak silinemedi ({draft_id}): {e}")
+        return False
 
 
 def send_draft(draft_id: str, token: str) -> str | None:
@@ -570,7 +697,7 @@ def gmail_search(query: str, token: str, limit: int = 25) -> list[dict]:
     """(gmail.readonly) Sorguya uyan mesajların başlıklarını döndürür."""
     url = ("https://gmail.googleapis.com/gmail/v1/users/me/messages?"
            + urlencode({"q": query, "maxResults": limit}))
-    raw = _get(url, {"Authorization": "Bearer " + token})
+    raw = gmail_get(url, token)
     if not raw:
         return []
     try:
@@ -579,9 +706,9 @@ def gmail_search(query: str, token: str, limit: int = 25) -> list[dict]:
         return []
     out = []
     for mid in ids:
-        m = _get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}"
+        m = gmail_get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}"
                  "?format=metadata&metadataHeaders=From&metadataHeaders=Subject"
-                 "&metadataHeaders=Date", {"Authorization": "Bearer " + token})
+                 "&metadataHeaders=Date", token)
         if not m:
             continue
         try:
@@ -659,7 +786,7 @@ def existing_draft_domains(token: str, own: str = "") -> tuple[set[str], int, li
     for _ in range(10):                  # 10 sayfa × 100 = 1000 taslak, fazlası zaten arıza
         url = ("https://gmail.googleapis.com/gmail/v1/users/me/drafts?maxResults=100"
                + (f"&pageToken={page}" if page else ""))
-        raw = _get(url, {"Authorization": "Bearer " + token})
+        raw = gmail_get(url, token)
         if not raw:
             return doms, pending, parsed, 1
         try:
@@ -672,8 +799,7 @@ def existing_draft_domains(token: str, own: str = "") -> tuple[set[str], int, li
             break
     missed = 0
     for did in ids:
-        m = _get(f"https://gmail.googleapis.com/gmail/v1/users/me/drafts/{did}?format=full",
-                 {"Authorization": "Bearer " + token})
+        m = gmail_get(f"https://gmail.googleapis.com/gmail/v1/users/me/drafts/{did}?format=full", token)
         if not m:
             missed += 1
             continue
@@ -707,7 +833,7 @@ def scan_sent(state: dict, token: str, own: str, sink=None) -> int:
         url = ("https://gmail.googleapis.com/gmail/v1/users/me/messages?"
                + urlencode({"q": "in:sent newer_than:180d", "maxResults": 50})
                + (f"&pageToken={page}" if page else ""))
-        raw = _get(url, {"Authorization": "Bearer " + token})
+        raw = gmail_get(url, token)
         if not raw:
             break
         try:
@@ -715,8 +841,8 @@ def scan_sent(state: dict, token: str, own: str, sink=None) -> int:
         except json.JSONDecodeError:
             break
         for mid in [m["id"] for m in data.get("messages", [])]:
-            m = _get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}"
-                     "?format=metadata&metadataHeaders=To", {"Authorization": "Bearer " + token})
+            m = gmail_get(f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}"
+                     "?format=metadata&metadataHeaders=To", token)
             if not m:
                 continue
             try:
@@ -848,6 +974,7 @@ def main() -> int:
     sys.path.insert(0, HERE)
     import drafting                                     # noqa: E402
     import report                                       # noqa: E402  self-report + ATS digest
+    import repair                                       # noqa: E402  bekleyen taslak onarımı
     today = date.today().isoformat()
 
     # pipeline.py verisini src/db.py üzerinden çözer; db.py de OUTREACHOS_DATA_DIR'e
@@ -869,6 +996,7 @@ def main() -> int:
     pending_count = 0
     parsed_drafts: list = []
     requeued: list = []            # token yoksa hiç kuyruğa alınmaz; rapor yine de okur
+    draft_scan_missed = 0
     health = {"state": "UNKNOWN", "sent": 0, "hard": 0, "soft": 0, "replies": 0,
               "bounce_rate": 0.0, "trend": "—", "window_days": DELIVER_WINDOW_DAYS,
               "watch": BOUNCE_WATCH, "critical": BOUNCE_CRITICAL,
@@ -931,29 +1059,88 @@ def main() -> int:
         if stale:
             print(f"  ~ {len(stale)} taslak denetimi yeniden kuyruğa alındı "
                   "(önceki sonuç doğrulama hatasından geliyordu, içerik kararı değil)")
+        # Gönderim kuyruğundaki taslaklar önce denetlenir: kural/profil değişip cache
+        # tazelendiğinde AUDIT_MAX_VERIFY kotası onlara yetmezse bugün gönderilemezler.
+        sirada = {i["id"] for i in state.get(autosend.QUEUE_KEY, [])}
+        parsed_drafts.sort(key=lambda d: d["id"] not in sirada)       # kararlı sıralama
+        rules = drafting.rules_version()
         audit_results = audit_drafts.audit(
             parsed_drafts, profile, sent_domains,
             verify_fn=(None if DRY_RUN else drafting.verify),
             numeric_fn=drafting.numeric_check,
-            cache=audit_cache, max_verify=AUDIT_MAX_VERIFY)
-        audit_lines = audit_drafts.summary_lines(audit_results)
+            cache=audit_cache, max_verify=AUDIT_MAX_VERIFY, rules=rules)
+
+        # Onarım, silme ve otomatik gönderim YALNIZCA motorun kendi açtığı taslaklara dokunur
+        # (state'te draft_id'si kayıtlı olanlar). Taslaklar klasöründe kullanıcının kendi
+        # yazdığı mailler de durur: daha önce yazışılmış bir firmaya hazırlanan yanıt taslağı
+        # "mükerrer" görünür ve silme açıkken kalıcı silinirdi; yeni bir firmaya yazılan yarım
+        # taslak da denetimden ✅ çıkarsa ertesi gün gönderilirdi.
+        bizim = {v.get("draft_id") for v in state.get("companies_already_contacted", {}).values()
+                 if isinstance(v, dict) and v.get("draft_id")}
+        kayitsiz = sum(1 for d in parsed_drafts if d["id"] not in bizim)
+        kayitsiz_lines = ([f"  ~ {kayitsiz} taslak motorun kaydında yok: onarım, silme ve "
+                           "otomatik gönderim bunlara dokunmaz"] if kayitsiz else [])
+
+        # --- Otomatik onarım (AUTO_REPAIR=1): ⚠ taslakları düzelt, sarmalanmış linkleri aç,
+        # AUTO_REPAIR_DELETE=1 ise onarılamayanı ve mükerreri sil. Onarılan taslak ✅ olur ve
+        # aşağıda veto kuyruğuna girer. DRY_RUN hiçbir taslağa dokunmaz.
+        repair_lines: list[str] = []
+        if AUTO_REPAIR and not DRY_RUN:
+            onarilabilir = {d["id"]: d for d in parsed_drafts if d["id"] in bizim}
+            fix = repair.run(
+                audit_results, onarilabilir, state, audit_cache,
+                today=today,
+                repair_fn=lambda body, problems: drafting.repair_and_verify(
+                    body, problems, profile, today),
+                update_fn=lambda i, to, subj, body: update_draft(i, to, subj, body, token),
+                delete_fn=lambda i: delete_draft(i, token),
+                key_fn=lambda body: audit_drafts.verdict_hash(body, profile, rules),
+                strip_urls=drafting.strip_urls, max_llm=REPAIR_MAX,
+                allow_delete=AUTO_REPAIR_DELETE)
+            silinen = {x["id"]: x for x in fix["deleted"]}
+            if silinen:
+                parsed_drafts[:] = [d for d in parsed_drafts if d["id"] not in silinen]
+                # Mükerrer taslağı motor sildi: firma zaten Gönderilenler'de. draft_id
+                # kalırsa requeue_deleted_drafts onu 'gönderilmeden silinmiş' sanıp havuza
+                # geri alır. Onarılamayanın draft_id'si BİLEREK kalır: o firma havuza dönsün.
+                for v in state.get("companies_already_contacted", {}).values():
+                    x = silinen.get(v.get("draft_id"))
+                    if x and x["why"] == "mükerrer":
+                        v["draft_id"] = None
+            repair_lines = repair.summary_lines(fix, AUTO_REPAIR_DELETE)
+
+        audit_lines = audit_drafts.summary_lines(audit_results) + repair_lines + kayitsiz_lines
         for ln in audit_lines:
             print(ln)
         live_ids = {d["id"] for d in parsed_drafts}
-        state["draft_audit"] = {k: v for k, v in audit_cache.items() if k in live_ids}
+        # Tarama eksikse okunamayan taslakların kararlarını ATMA: taslak duruyor, bir
+        # sonraki tam taramada aynı kararı bedavaya geri almak yerine yeniden LLM harcanırdı.
+        if draft_scan_missed == 0:
+            state["draft_audit"] = {k: v for k, v in audit_cache.items() if k in live_ids}
+            state[repair.MEMO_KEY] = {k: v for k, v in state.get(repair.MEMO_KEY, {}).items()
+                                      if k in live_ids}
 
         # --- Onaylı taslakların VETO PENCERELİ gönderimi (AUTO_SEND=1 değilse hiç göndermez).
         # Zincir: audit ✅GUVENLI → bir gün bekleme (kullanıcı silerse veto) → bounce guard →
         # MX yeniden doğrulama → gönder. Her halka bağımsız olarak gönderimi iptal edebilir.
         allowed, send_cap, send_reasons = autosend.gate(health, AUTO_SEND, AUTO_SEND_CAP)
         safe_ids = {r["id"] for r in audit_results if r["verdict"] == audit_drafts.SAFE}
+        sirada_ids = {r["id"] for r in audit_results if r["verdict"] == audit_drafts.PENDING}
         bekleyen = autosend.due(state, today)
         # VETO: kuyruktayken Gmail'den silinen taslak artık canlı değil → gönderilmez, düşürülür.
-        vetolu = {i["id"] for i in bekleyen} - live_ids
+        # Eksik taramada 'listede yok' veto sayılmaz; her id Gmail'e tek tek sorulur.
+        vetolu = confirmed_vetoes({i["id"] for i in bekleyen}, live_ids,
+                                  draft_scan_missed == 0, lambda i: draft_exists(i, token))
         if vetolu and not DRY_RUN:
             autosend.drop(state, vetolu)
             print(f"  ~ {len(vetolu)} kuyruk öğesi taslağı silindiği için gönderilmedi (veto)")
-        bekleyen = [i for i in bekleyen if i["id"] in live_ids]
+        # Sahiplik: kuyrukta olup motorun kaydında olmayan taslak gönderilmez, kuyruktan düşer.
+        yabanci = [i for i in state.get(autosend.QUEUE_KEY, [])
+                   if i["id"] not in bizim and i["id"] not in vetolu]
+        yabanci_ids = {i["id"] for i in yabanci}
+        if yabanci and not DRY_RUN:
+            autosend.drop(state, yabanci_ids)
+        bekleyen = [i for i in bekleyen if i["id"] in live_ids and i["id"] not in yabanci_ids]
         gonderilen: list = []
         # Bu run'da kuyruktan DÜŞÜRÜLEN id'ler. Kuyruğu yeniden doldururken bunlar hariç
         # tutulmazsa aynı taslak aynı run içinde geri kuyruğa girer: audit_results hâlâ
@@ -964,7 +1151,9 @@ def main() -> int:
         # kuyruğa girip düşmeye devam eder).
         islenen: set = set()
         if allowed and not DRY_RUN:
-            for item in bekleyen[:send_cap]:
+            # Denetim sırası bugün gelmeyen (⏳) taslak 'temiz değil' DEĞİLDİR: kuyrukta
+            # kalır, sırası gelen run'da gönderilir. Gönderim hakkını da harcamaz.
+            for item in [i for i in bekleyen if i["id"] not in sirada_ids][:send_cap]:
                 if item["id"] not in safe_ids:      # bugünkü denetimde artık temiz değil
                     autosend.drop(state, {item["id"]})
                     islenen.add(item["id"])
@@ -984,11 +1173,12 @@ def main() -> int:
                     print(f"    ✉ gönderildi: {item['company']} ({item['to']})")
         # Bugün onaylananları yarına kuyrukla — kullanıcı raporda görüp veto edebilsin.
         kuyrukta = {i["id"] for i in state.get(autosend.QUEUE_KEY, [])} | islenen | vetolu
-        yeni_kuyruk = autosend.pick(audit_results, AUTO_SEND_CAP, exclude_ids=kuyrukta)
+        yeni_kuyruk = autosend.pick([r for r in audit_results if r["id"] in bizim],
+                                    AUTO_SEND_CAP, exclude_ids=kuyrukta)
         if yeni_kuyruk and not DRY_RUN:
             autosend.enqueue(state, yeni_kuyruk, today)
         send_lines = autosend.summary_lines(bekleyen, gonderilen, yeni_kuyruk,
-                                            allowed, send_reasons, send_cap)
+                                            allowed, send_reasons, send_cap, unowned=yabanci)
         for ln in send_lines:
             print(ln)
 
@@ -1315,6 +1505,65 @@ def _self_test() -> int:
     requeue_deleted_drafts(s2, live, sent)
     assert s2["redraft_queue"][0]["durum"] == "yeniden oluşturuldu"
     assert s2["redraft_queue"][0]["deneme"] == 1             # sayaç korundu
+
+    # --- Gmail erişim katmanı: hangi hata yeniden denenir, hangisi denenmez ---
+    assert gmail_retryable(429, "") and gmail_retryable(503, "") and gmail_retryable(0, "")
+    assert gmail_retryable(403, '{"reason": "userRateLimitExceeded"}')
+    assert gmail_retryable(403, '{"reason": "rateLimitExceeded"}')
+    assert not gmail_retryable(403, '{"reason": "insufficientPermissions"}')
+    assert not gmail_retryable(404, "") and not gmail_retryable(401, "")
+
+    global _gmail_waited, _gmail_err_logged
+    import io
+    from contextlib import redirect_stdout
+
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b"{}"
+
+    def opener(codes):
+        """Sırayla verilen kodları döndüren sahte urlopen (200 → başarılı cevap)."""
+        kalan = list(codes)
+
+        def _open(req, timeout=0):
+            code = kalan.pop(0)
+            if code == 200:
+                return _Resp()
+            raise HTTPError(req.full_url, code, "x", {}, io.BytesIO(b"userRateLimitExceeded"))
+        return _open
+
+    def fetch(codes, **kw):
+        global _gmail_waited, _gmail_err_logged
+        _gmail_waited, _gmail_err_logged = 0.0, 0
+        uyku: list = []
+        with redirect_stdout(io.StringIO()) as out:
+            sonuc = gmail_fetch("https://x/users/me/drafts/D1", "t", _open=opener(codes),
+                                _sleep=uyku.append, **kw)
+        return sonuc, [u for u in uyku if u >= 1], out.getvalue()
+
+    sonuc, uyku, log = fetch([429, 429, 200])
+    assert sonuc == (200, b"{}") and uyku == [1, 2], (sonuc, uyku)      # bekleyip başardı
+    assert "HTTP 429" in log and "userRateLimitExceeded" in log        # sebep log'da
+    sonuc, uyku, _ = fetch([404])
+    assert sonuc == (404, b"") and uyku == []                           # kalıcı hata: bekleme yok
+    sonuc, uyku, log = fetch([404], expect=(404,))
+    assert sonuc == (404, b"") and log == ""                            # beklenen 404 hata değil
+    sonuc, uyku, _ = fetch([429] * 6)
+    assert sonuc == (429, b"") and uyku == list(GMAIL_RETRY_WAITS)      # denemeler tükendi
+    # bütçe: toplam bekleme tavanı aşılacaksa beklemeden düşer
+    _gmail_waited, _gmail_err_logged = GMAIL_RETRY_BUDGET_SEC, 5
+    uyku2: list = []
+    assert gmail_fetch("https://x/users/me/drafts/D1", "t", _open=opener([429]),
+                       _sleep=uyku2.append) == (429, b"")
+    assert [u for u in uyku2 if u >= 1] == []
+    _gmail_waited, _gmail_err_logged = 0.0, 0
+
+    # --- Hayalet veto: eksik taramada 'listede yok' silinmiş demek değildir ---
+    durum = {"Q2": True, "Q3": False, "Q4": None}       # duruyor / 404 / cevap yok
+    assert confirmed_vetoes({"Q1", "Q2", "Q3", "Q4"}, {"Q1"}, True, durum.get) == {"Q2", "Q3", "Q4"}
+    assert confirmed_vetoes({"Q1", "Q2", "Q3", "Q4"}, {"Q1"}, False, durum.get) == {"Q3"}
+    assert confirmed_vetoes({"Q1"}, {"Q1"}, False, durum.get) == set()
 
     # --- Serper cevabı doğru ayrıştırılıyor mu (ağa çıkmadan) ---
     # CSE'den geçerken sessizce yanlış alan adı okumak, aramanın haftalarca

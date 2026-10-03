@@ -11,12 +11,15 @@ boşaltır, sayı düşer, üretim yeniden açılır. Kilit ancak böyle çözü
   ✅ GUVENLI  — mükerrer değil, içerik temiz → gönderebilirsin.
   👀 INCELE   — içerik otomatik doğrulanamadı (LLM yok) → elle bak; güvenli varsayma.
 
-GÜVENLİK: bu modül OKUR ve RAPORLAR; asla otomatik göndermez, asla silmez (silme geri
-alınamaz — kararı kullanıcı verir). Drafts-only ilkesi korunur.
+GÜVENLİK: bu modül OKUR ve RAPORLAR; kendisi göndermez, düzeltmez, silmez. Kararları
+kullanan iki ayrı katman var ve ikisi de kendi anahtarıyla açılır: autosend.py (AUTO_SEND)
+✅ taslakları gönderir, repair.py (AUTO_REPAIR) ⚠ taslakları onarır. Silme geri alınamaz
+olduğu için üçüncü bir anahtarın (AUTO_REPAIR_DELETE) arkasındadır.
 
 Maliyet: içerik doğrulaması taslak başına bir LLM çağrısı. Gövde değişmediyse karar
-`cache` (state['draft_audit']) üzerinden gövde+profil hash'iyle yeniden kullanılır —
-ilk geçişten sonra günlük maliyet ~sıfır. Profil değişirse kararlar tazelenir.
+`cache` (state['draft_audit']) üzerinden gövde+profil+kural hash'iyle yeniden kullanılır —
+ilk geçişten sonra günlük maliyet ~sıfır. Profil ya da denetim kuralı değişirse kararlar
+tazelenir.
 Doğrulama/sayı fonksiyonları enjekte edilir (drafting.verify / drafting.numeric_check),
 böylece çekirdek ağsız test edilebilir.
 
@@ -49,8 +52,8 @@ def profile_hash(profile: dict | None) -> str:
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
 
 
-def verdict_hash(body: str, profile: dict | None = None) -> str:
-    """Cache anahtarı = gövde + profil.
+def verdict_hash(body: str, profile: dict | None = None, rules: str = "") -> str:
+    """Cache anahtarı = gövde + profil + denetim kuralı sürümü.
 
     Karar "bu gövde bu profile karşı doğru mu" sorusunun cevabı, yani SADECE
     gövdeye bakmak yanlış: profil düzeltilince eski kararlar geçersiz hale gelir
@@ -58,10 +61,16 @@ def verdict_hash(body: str, profile: dict | None = None) -> str:
     yaşandı: profile mezuniyet ayı ve NLP deneyimi eklendi, buna rağmen o iddiaları
     "uydurma" diye işaretleyen kararlar DÜZELT listesinde kalmaya devam etti.
 
-    Profil değişince tüm kararlar tazelenir; maliyet AUDIT_MAX_VERIFY ile run
+    Aynı tuzak denetim KURALI için de geçerli: `rules` (drafting.rules_version) anahtara
+    girmezse kural gevşese de eski kararlar yaşar. Gerçekte yaşandı: URL içindeki sayılar
+    denetim dışına alındı, ama 14 taslak Gmail'in link sarmalayıcısındaki zaman damgası
+    yüzünden "profilde olmayan sayı" kararıyla günlerce DÜZELT'te kaldı.
+
+    Profil ya da kural değişince tüm kararlar tazelenir; maliyet AUDIT_MAX_VERIFY ile run
     başına sınırlı olduğu için bu birkaç run'a yayılır.
     """
-    return f"{body_hash(body)}:{profile_hash(profile)}"
+    base = f"{body_hash(body)}:{profile_hash(profile)}"
+    return f"{base}:{rules}" if rules else base
 
 
 def _header(payload: dict, name: str) -> str:
@@ -118,13 +127,18 @@ def content_verdict(verify_result, numeric_problem) -> tuple:
     if verify_result is None:
         # LLM cevap vermedi — repo ilkesi: şüphedeyken güvenli sayma, elle baktır
         return REVIEW, (problems or ["içerik otomatik doğrulanamadı — göndermeden önce elle oku"])
-    if not verify_result.get("temiz", False):
-        problems += verify_result.get("sorunlar", [])
+    if verify_result.get("temiz") is not True:
+        sorunlar = [str(x) for x in (verify_result.get("sorunlar") or [])]
+        if not sorunlar and not problems:
+            # "temiz değil" ama sebep yok (ya da alan hiç yok): bozuk cevap. Güvenli sayılırsa
+            # gönderilir, içerik hatası sayılırsa onarıma ve silmeye gider; ikisi de yanlış.
+            return REVIEW, ["doğrulama sebep vermeden reddetti: göndermeden önce elle oku"]
+        problems += sorunlar
     return (CONTENT, problems) if problems else (SAFE, [])
 
 
 def audit_one(draft: dict, profile: dict, sent_domains: set, verify_fn, numeric_fn,
-              cache: dict, may_verify: bool = True) -> dict:
+              cache: dict, may_verify: bool = True, rules: str = "") -> dict:
     """Tek taslağı denetler. Mükerrer ise içerik LLM'i hiç çağrılmaz (boşa maliyet yok).
     may_verify False ve cache'te yoksa: LLM çağrılmaz, verdict=BEKLEMEDE (run kotası doldu —
     sonraki run'da denetlenir) ve cache'e YAZILMAZ (kalıcı 'bekleme' oluşmasın)."""
@@ -135,7 +149,7 @@ def audit_one(draft: dict, profile: dict, sent_domains: set, verify_fn, numeric_
         return {**base, "verdict": DUPLICATE,
                 "reasons": [f"{dom} adresine Gönderilenler'de zaten mail var — tekrar gönderme"]}
 
-    h = verdict_hash(draft.get("body", ""), profile)
+    h = verdict_hash(draft.get("body", ""), profile, rules)
     cached = cache.get(draft["id"]) if cache is not None else None
     if cached and cached.get("hash") == h:
         verdict, reasons = cached["verdict"], cached["reasons"]
@@ -156,7 +170,8 @@ def audit_one(draft: dict, profile: dict, sent_domains: set, verify_fn, numeric_
 
 
 def audit(drafts: list, profile: dict, sent_domains: set, verify_fn=None,
-          numeric_fn=None, cache: dict | None = None, max_verify: int | None = None) -> list:
+          numeric_fn=None, cache: dict | None = None, max_verify: int | None = None,
+          rules: str = "") -> list:
     """Tüm bekleyen taslakları denetler → karar listesi. cache: state['draft_audit'].
     max_verify: bu run'da en fazla kaç YENİ (cache'siz, mükerrer-olmayan) taslağa içerik LLM'i
     çağrılsın (maliyet/zaman koruması). Aşılınca kalanlar BEKLEMEDE olur, cache'lenmez → sonraki
@@ -166,11 +181,12 @@ def audit(drafts: list, profile: dict, sent_domains: set, verify_fn=None,
         dom = d["domain"]
         is_dup = bool(dom) and dom in sent_domains
         cached = cache.get(d["id"]) if cache is not None else None
-        is_cached = bool(cached and cached.get("hash") == verdict_hash(d.get("body", ""), profile))
+        is_cached = bool(cached and cached.get("hash") == verdict_hash(d.get("body", ""), profile, rules))
         may = (not is_dup) and (not is_cached) and (max_verify is None or verified < max_verify)
         if may and verify_fn is not None:
             verified += 1
-        out.append(audit_one(d, profile, sent_domains, verify_fn, numeric_fn, cache, may_verify=may))
+        out.append(audit_one(d, profile, sent_domains, verify_fn, numeric_fn, cache, may_verify=may,
+                             rules=rules))
     return out
 
 
@@ -223,6 +239,9 @@ if __name__ == "__main__":
     assert verdict_hash("ayni govde", p1) != verdict_hash("ayni govde", p2)
     assert verdict_hash("ayni govde", p1) == verdict_hash("ayni  GOVDE", p1)
     assert profile_hash({"a": 1, "b": 2}) == profile_hash({"b": 2, "a": 1})
+    # ... ve denetim kuralına: kural sürümü değişince de tazelenmeli
+    assert verdict_hash("ayni govde", p1, "k1") != verdict_hash("ayni govde", p1, "k2")
+    assert verdict_hash("ayni govde", p1, "") == verdict_hash("ayni govde", p1)
 
     # decode_body: düz base64url + çok parçalı
     enc = base64.urlsafe_b64encode("Selam ekip, Acme Panel projesini kurdum.".encode()).decode().rstrip("=")
@@ -277,6 +296,11 @@ if __name__ == "__main__":
     audit(d2, profile, set(), counting_verify, numeric_fn, cache)
     audit(d2, profile, set(), counting_verify, numeric_fn, cache)   # 2. tur cache'ten
     assert calls["n"] == 1, calls["n"]
+
+    # kural sürümü değişti → aynı gövde yeniden doğrulanır, sonra yine cache'ten gelir
+    audit(d2, profile, set(), counting_verify, numeric_fn, cache, rules="v2")
+    audit(d2, profile, set(), counting_verify, numeric_fn, cache, rules="v2")
+    assert calls["n"] == 2, calls["n"]
 
     c = counts(res)
     assert c == {SAFE: 1, DUPLICATE: 1, CONTENT: 1, REVIEW: 1, PENDING: 0}, c

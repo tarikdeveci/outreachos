@@ -109,9 +109,15 @@ def record_sent(state: dict, item: dict, day: str, message_id: str) -> None:
 
 
 def summary_lines(due_items: list, sent: list, queued: list, allowed: bool,
-                  reasons: list, cap: int) -> list:
-    """Rapor bloğu — ne gitti, ne kuyrukta, veto nasıl yapılır."""
+                  reasons: list, cap: int, unowned: list | None = None) -> list:
+    """Rapor bloğu — ne gitti, ne kuyrukta, veto nasıl yapılır.
+
+    unowned: kuyrukta olup motorun kendi açtığı taslaklar arasında bulunmayanlar. Bunlar
+    gönderilmez ve kuyruktan düşer; kullanıcı neden gitmediğini raporda görsün."""
     lines: list[str] = []
+    if unowned:
+        lines.append(f"🚫 Motorun kaydında yok, gönderilmedi ({len(unowned)}):")
+        lines += [f"    • {u.get('company', '')} ({u['to']})" for u in unowned]
     if sent:
         lines.append(f"📤 Otomatik gönderildi ({len(sent)}/{cap}):")
         lines += [f"    • {s['company']} ({s['to']})" for s in sent]
@@ -182,4 +188,9 @@ if __name__ == "__main__":
 
     lines = summary_lines([], [{"company": "a", "to": "hi@a.com"}], st[QUEUE_KEY], True, [], 5)
     assert any("gönderildi" in x for x in lines) and any("SİL" in x for x in lines)
+
+    # sahiplik: motorun kaydında olmayan kuyruk öğesi raporda ayrı görünür
+    assert not any("kaydında yok" in x for x in lines)
+    lines = summary_lines([], [], [], True, [], 5, unowned=[{"company": "z", "to": "hi@z.com"}])
+    assert "kaydında yok" in lines[0] and "hi@z.com" in lines[1]
     print("autosend self-test: OK")
