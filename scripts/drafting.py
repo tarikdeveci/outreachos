@@ -195,20 +195,24 @@ def strip_urls(body: str) -> str:
     return URL_RE.sub(" ", body or "")
 
 
-def numeric_check(body: str, profile: dict) -> str | None:
+def numeric_check(body: str, profile: dict, allow: str = "") -> str | None:
     """Profilde geçmeyen bir sayı varsa sebebini döndürür.
 
     LLM doğrulamasının yanında deterministik bir ikinci kat: model bazen
     metriği gözden kaçırıyor, bu kontrol kaçırmıyor. '150K+ aylık etkin
     kullanıcı' uydurmasını yakalayan buydu.
+
+    allow: firmanın adı ya da domaini. İçindeki rakamlar iddia değil isimdir:
+    '83sciences.ai' firmasına yazılan her taslak '83' yüzünden uydurma sayılıp eleniyordu.
     """
     prof_text = json.dumps(profile, ensure_ascii=False).lower()
+    allow_nums = set(re.findall(r"\d+", allow or ""))
     for raw in NUM_RE.findall(strip_urls(body)):
         tok = raw.strip().rstrip(".,").lower().replace(" ", "")
         if not tok or tok in NUM_WHITELIST:
             continue
         digits = tok.rstrip("%k+mbinmilyon").rstrip(".,")
-        if not digits or digits in NUM_WHITELIST:
+        if not digits or digits in NUM_WHITELIST or digits in allow_nums:
             continue
         # Sınır kontrolü rakam ve noktaya bakar, VİRGÜLE bakmaz.
         #   - rakam komşusu engellenmeli: '500' aranırken 'ISO 50001' eşleşmemeli
@@ -257,7 +261,8 @@ def repair(body: str, problems: list, profile: dict, today: str) -> dict | None:
 
 
 def repair_and_verify(body: str, problems: list, profile: dict, today: str,
-                      rounds: int = 2, repair_fn=None, verify_fn=None) -> tuple:
+                      rounds: int = 2, repair_fn=None, verify_fn=None,
+                      allow: str = "") -> tuple:
     """(yeni_govde | None, sebep, sayilir).
 
     `sayilir` False ise başarısızlık İÇERİK kaynaklı değil (model cevap vermedi, kota,
@@ -281,7 +286,7 @@ def repair_and_verify(body: str, problems: list, profile: dict, today: str,
         # getirirse elde gönderilecek bir mail kalmaz; bunu onarım sayma.
         if len(yeni) < len(body) * 0.5:
             return None, "onarım metni yarıdan fazla kısalttı", True
-        sayi = numeric_check(yeni, profile)
+        sayi = numeric_check(yeni, profile, allow)
         v = verify_fn(yeni, profile)
         if v is None:
             return None, "doğrulama adımı cevap vermedi", False
@@ -308,7 +313,7 @@ def judge_draft_verify(company: dict, site_text: str, profile: dict,
         if not d or not d.get("govde"):
             return None, "taslak üretilemedi"
         # Deterministik sayı denetimi önce — ucuz ve kesin.
-        sayi_sorunu = numeric_check(d["govde"], profile)
+        sayi_sorunu = numeric_check(d["govde"], profile, str(company.get("domain", "")))
 
         v = verify(d["govde"], profile)
         if v is None:
@@ -330,6 +335,10 @@ if __name__ == "__main__":
     prof = {"projeler": ["Acme Panel"], "metrik": "ortalama 0.56"}
     assert numeric_check("skor 0.56 oldu", prof) is None
     assert numeric_check("150K+ kullanıcı", prof) is not None
+    # Firma adındaki rakam iddia değildir; aynı rakam başka firmada hâlâ yakalanır
+    assert numeric_check("83 Sciences ekibine yazıyorum", prof) is not None
+    assert numeric_check("83 Sciences ekibine yazıyorum", prof, "83sciences.ai") is None
+    assert numeric_check("Company42 için 97 müşteri", prof, "company42.com") is not None
     # URL içindeki sayı iddia değildir
     assert numeric_check("bkz https://x.io/url?ust=1790242035715000&sa=E", prof) is None
 

@@ -622,12 +622,17 @@ def draft_exists(draft_id: str, token: str) -> bool | None:
     return True if code == 200 else (False if code == 404 else None)
 
 
+def owned_ids(state: dict) -> set:
+    """Motorun kendi açtığı taslakların id'leri (state'te draft_id'si kayıtlı olanlar)."""
+    return {v.get("draft_id") for v in state.get("companies_already_contacted", {}).values()
+            if isinstance(v, dict) and v.get("draft_id")}
+
+
 def owned_pending(parsed_drafts: list, state: dict, missed: int = 0) -> int:
-    """Bekleyen-taslak freninin saydığı sayı: yalnızca motorun kendi açtığı taslaklar
-    (state'te draft_id'si kayıtlı olanlar). Okunamayan taslağın (missed) kimin olduğu
-    bilinmediği için o da sayılır: eksik taramada üretim temkinli tarafta kalır."""
-    bizim = {v.get("draft_id") for v in state.get("companies_already_contacted", {}).values()
-             if isinstance(v, dict) and v.get("draft_id")}
+    """Bekleyen-taslak freninin saydığı sayı: yalnızca motorun kendi açtığı taslaklar.
+    Okunamayan taslağın (missed) kimin olduğu bilinmediği için o da sayılır: eksik
+    taramada üretim temkinli tarafta kalır."""
+    bizim = owned_ids(state)
     return sum(1 for d in parsed_drafts if d["id"] in bizim) + missed
 
 
@@ -1106,8 +1111,13 @@ def main() -> int:
         sirada = {i["id"] for i in state.get(autosend.QUEUE_KEY, [])}
         parsed_drafts.sort(key=lambda d: d["id"] not in sirada)       # kararlı sıralama
         rules = drafting.rules_version()
+        # Yalnızca motorun kendi taslakları denetlenir. Kaydı olmayan taslağa onarım, silme
+        # ve gönderim zaten dokunmuyor; onları denetlemek run başına AUDIT_MAX_VERIFY kadar
+        # LLM çağrısını sonucu hiç kullanılmayacak işe harcıyor, kayıtlı taslağı sıraya
+        # düşürüyor ve raporu yüzlerce "sırada" satırıyla dolduruyordu.
+        bizim = owned_ids(state)
         audit_results = audit_drafts.audit(
-            parsed_drafts, profile, sent_domains,
+            [d for d in parsed_drafts if d["id"] in bizim], profile, sent_domains,
             verify_fn=(None if DRY_RUN else drafting.verify),
             numeric_fn=drafting.numeric_check,
             cache=audit_cache, max_verify=AUDIT_MAX_VERIFY, rules=rules)
@@ -1117,11 +1127,9 @@ def main() -> int:
         # yazdığı mailler de durur: daha önce yazışılmış bir firmaya hazırlanan yanıt taslağı
         # "mükerrer" görünür ve silme açıkken kalıcı silinirdi; yeni bir firmaya yazılan yarım
         # taslak da denetimden ✅ çıkarsa ertesi gün gönderilirdi.
-        bizim = {v.get("draft_id") for v in state.get("companies_already_contacted", {}).values()
-                 if isinstance(v, dict) and v.get("draft_id")}
         kayitsiz = sum(1 for d in parsed_drafts if d["id"] not in bizim)
-        kayitsiz_lines = ([f"  ~ {kayitsiz} taslak motorun kaydında yok: onarım, silme ve "
-                           "otomatik gönderim bunlara dokunmaz"] if kayitsiz else [])
+        kayitsiz_lines = ([f"  ~ {kayitsiz} taslak motorun kaydında yok: denetim, onarım, silme "
+                           "ve otomatik gönderim bunlara dokunmaz"] if kayitsiz else [])
 
         # --- Otomatik onarım (AUTO_REPAIR=1): ⚠ taslakları düzelt, sarmalanmış linkleri aç,
         # AUTO_REPAIR_DELETE=1 ise onarılamayanı ve mükerreri sil. Onarılan taslak ✅ olur ve
@@ -1132,8 +1140,8 @@ def main() -> int:
             fix = repair.run(
                 audit_results, onarilabilir, state, audit_cache,
                 today=today,
-                repair_fn=lambda body, problems: drafting.repair_and_verify(
-                    body, problems, profile, today),
+                repair_fn=lambda body, problems, allow="": drafting.repair_and_verify(
+                    body, problems, profile, today, allow=allow),
                 update_fn=lambda i, to, subj, body: update_draft(i, to, subj, body, token),
                 delete_fn=lambda i: delete_draft(i, token),
                 key_fn=lambda body: audit_drafts.verdict_hash(body, profile, rules),
@@ -1158,7 +1166,8 @@ def main() -> int:
         # Tarama eksikse okunamayan taslakların kararlarını ATMA: taslak duruyor, bir
         # sonraki tam taramada aynı kararı bedavaya geri almak yerine yeniden LLM harcanırdı.
         if draft_scan_missed == 0:
-            state["draft_audit"] = {k: v for k, v in audit_cache.items() if k in live_ids}
+            state["draft_audit"] = {k: v for k, v in audit_cache.items()
+                                    if k in live_ids and k in bizim}
             state[repair.MEMO_KEY] = {k: v for k, v in state.get(repair.MEMO_KEY, {}).items()
                                       if k in live_ids}
 
@@ -1649,6 +1658,7 @@ def _self_test() -> int:
     assert owned_pending([{"id": "D1"}, {"id": "X9"}], st_own) == 1
     assert owned_pending([{"id": "X9"}], st_own, missed=3) == 3
     assert owned_pending([], {}) == 0
+    assert owned_ids(st_own) == {"D1"} and owned_ids({}) == set()
 
     # --- Serper cevabı doğru ayrıştırılıyor mu (ağa çıkmadan) ---
     # CSE'den geçerken sessizce yanlış alan adı okumak, aramanın haftalarca

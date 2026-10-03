@@ -168,7 +168,7 @@ def audit_one(draft: dict, profile: dict, sent_domains: set, verify_fn, numeric_
     if cached and cached.get("hash") == h and not (kararsiz and may_verify and verify_fn):
         verdict, reasons = cached["verdict"], cached["reasons"]
     elif may_verify and verify_fn is not None:
-        numeric_problem = numeric_fn(draft["body"], profile) if numeric_fn else None
+        numeric_problem = numeric_fn(draft["body"], profile, dom or "") if numeric_fn else None
         vr = verify_fn(draft["body"], profile)
         verdict, reasons = content_verdict(vr, numeric_problem)
         # İkinci denetim de karar veremedi: iş kullanıcıya kalmaz, taslak onarıma gider
@@ -299,7 +299,7 @@ if __name__ == "__main__":
     def verify_fn(b, _p):
         return dirty if "uydurma" in b else (None if "belirsiz" in b else clean)
 
-    def numeric_fn(_b, _p):
+    def numeric_fn(_b, _p, _allow=""):
         return None
 
     res = audit(drafts, profile, sent_domains, verify_fn, numeric_fn, cache)

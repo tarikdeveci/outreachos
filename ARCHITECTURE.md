@@ -296,8 +296,9 @@ yok) sorar. Anahtar kurumsal adreste domain, ücretsiz postada adresin kendisidi
 taslak kuyruktan düşer ve kaydına `sent_confirmed` yazılır (sonraki denetim onu 🔁 sayar);
 Gmail cevap vermezse taslak gönderilmez, kuyrukta kalır.
 
-**Sahiplik filtresi:** onarım, silme ve otomatik gönderim yalnızca motorun kendi açtığı
-taslaklara dokunur (`companies_already_contacted` içinde `draft_id`'si kayıtlı olanlar).
+**Sahiplik filtresi:** denetim, onarım, silme ve otomatik gönderim yalnızca motorun kendi
+açtığı taslaklara dokunur (`companies_already_contacted` içinde `draft_id`'si kayıtlı olanlar).
+Bekleyen-taslak freni de yalnızca bunları sayar; kayıtsız taslak denetim kotası harcamaz.
 Taslaklar klasöründe kullanıcının elle yazdığı mailler de durur; filtre olmasa yazışılmış
 bir firmaya hazırlanan yanıt taslağı "mükerrer" diye silinir, yeni bir firmaya yazılan yarım
 taslak da ✅ çıkarsa ertesi gün gönderilirdi. Kaydı olmayan taslak sayısı raporda görünür;

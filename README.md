@@ -177,7 +177,7 @@ Windows PowerShell: `$env:SEARCH_API_KEY="..."`
 - ⚙️ `AUTO_SEND=1` bilinçli bir tercihtir ve kendi zinciri vardır: yalnızca içerik denetiminden ✅ geçmiş, bir gün veto penceresinde beklemiş ve MX'i yeniden doğrulanmış taslak gönderilir; günlük sert tavan uygulanır.
 - ⚙️ `AUTO_REPAIR_DELETE=1` taslakları **kalıcı** siler (çöp kutusu yok). Sadece onarılamayan ve mükerrer taslaklar için; kapalıyken motor hiçbir taslağı silmez.
 - ✅ **Aynı yere ikinci mail gitmez:** gönderimden hemen önce son bir kapı alıcıyı aynı run'a, kalıcı gönderim kaydına ve Gmail Gönderilenler'e (tarih sınırı olmadan) karşı yeniden sorar. Daha önce mail gitmişse taslak gönderilmez; Gmail'e sorulamazsa da gönderilmez, sonraki run yeniden dener.
-- ✅ Motor yalnızca **kendi açtığı** taslaklara dokunur: Gmail'de elle yazdığın taslaklar onarılmaz, silinmez, gönderilmez (raporda "motorun kaydında yok" diye sayılır).
+- ✅ Motor yalnızca **kendi açtığı** taslaklara dokunur: Gmail'de elle yazdığın taslaklar denetlenmez, onarılmaz, silinmez, gönderilmez (raporda "motorun kaydında yok" diye sayılır).
 - ❌ CAPTCHA otomatik geçilmez; LinkedIn'de otomatik mesaj atılmaz (hazır arama linki verilir, mesajı sen atarsın).
 - ❌ Kişisel tanıdık şirketleri (`excluded_companies_seed_personal`) pipeline'a girmez — Kişisel/Bekleyen sekmesinde manuel karar bekler.
 - ✅ `daily_caps` config'den açılıp kapanabilir; varsayılan **açık** (Genel Bakış'taki "aktif" anahtarı).

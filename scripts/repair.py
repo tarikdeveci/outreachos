@@ -63,7 +63,7 @@ def run(results: list, drafts: dict, state: dict, cache: dict, *, today: str,
     onarılan ✅ olur, silinen listeden çıkar.
 
     drafts:    id → parse_draft çıktısı (to/subject/body)
-    repair_fn: (govde, sorunlar) → (yeni_govde | None, sebep, sayilir)
+    repair_fn: (govde, sorunlar, firma_domaini) → (yeni_govde | None, sebep, sayilir)
     update_fn: (id, to, konu, govde) → bool
     delete_fn: (id) → bool
     key_fn:    (govde) → audit cache anahtarı
@@ -119,7 +119,7 @@ def run(results: list, drafts: dict, state: dict, cache: dict, *, today: str,
             st["waiting"] += 1
             continue
         used += 1
-        fixed, why, counts = repair_fn(body, r["reasons"])
+        fixed, why, counts = repair_fn(body, r["reasons"], r.get("domain") or "")
         if fixed:
             fixed = unwrap_links(fixed)
             if update_fn(r["id"], d["to"], d["subject"], fixed):
@@ -201,7 +201,7 @@ if __name__ == "__main__":
                  "bad": {"hash": "x", "verdict": C, "reasons": ["sorun"]}}
         return results, drafts, cache
 
-    def repair_fn(body, _problems):
+    def repair_fn(body, _problems, _allow=""):
         if "onarılır" in body:
             return "onarılmış gövde", "", True
         if "altyapı" in body:
@@ -239,9 +239,9 @@ if __name__ == "__main__":
     # --- ikinci run, silme hâlâ kapalı: onarılamayan için LLM yeniden çağrılmaz
     calls = {"n": 0}
     orig = repair_fn
-    def counting(body, problems):
+    def counting(body, problems, allow=""):
         calls["n"] += 1
-        return orig(body, problems)
+        return orig(body, problems, allow)
     results, drafts, cache = setup()
     run(results, drafts, state, cache, today="2026-10-03", repair_fn=counting,
         update_fn=lambda *a: True, delete_fn=lambda i: True, key_fn=lambda b: b,
