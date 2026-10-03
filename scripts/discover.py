@@ -1580,6 +1580,10 @@ def main() -> int:
         print(f"\n[DRY_RUN] {len(drafted)} aday bulundu, state/log/özet YAZILMADI:")
         for x in drafted:
             print(f"   - {x['firma']} ({x['email']}) — {x['sektor']}")
+        for grup, adet in report.skip_breakdown(skipped):
+            print(f"   elenen {adet:>4}: {grup}")
+        for d, why in [s for s in skipped if re.search(r"eleme:|HALÜSİNASYON|pipeline:", s[1])][:20]:
+            print(f"     x {d}: {why[:140]}")
         print(f"Bitti: {len(drafted)}/{TARGET} aday, {len(skipped)} elendi.")
         return 0
 
@@ -1673,6 +1677,9 @@ def main() -> int:
             if done:
                 f.write(f"\n_{done} firmanın taslağı yeniden oluşturuldu._\n")
         f.write(f"\n## Elenenler ({len(skipped)})\n\n")
+        for grup, adet in report.skip_breakdown(skipped):
+            f.write(f"- **{adet}** {grup}\n")
+        f.write("\n")
         for d, why in skipped[:80]:
             f.write(f"- `{d}` — {why}\n")
         f.write("\n" + "\n".join(log) + "\n")

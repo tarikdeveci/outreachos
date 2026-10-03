@@ -148,6 +148,37 @@ def build_linkedin_targets(drafted, limit: int = 5) -> list:
              "mesaj": d.get("linkedin_mesaji", "")} for d in ranked]
 
 
+# Eleme sebebi metni → rapor grubu. İlk eşleşen kazanır; hiçbiri uymazsa "diğer".
+ELEME_GRUPLARI = (
+    ("daha önce işlendi", "daha önce yazıldı ya da taslağı var"),
+    ("bounce aldı", "adresi ölü (bounce)"),
+    ("ülke filtresi", "ülke filtresi dışı"),
+    ("site açılmadı", "site açılmadı"),
+    ("e-posta bulunamadı", "sitede adres yok"),
+    ("rol kutusu", "yalnızca rol kutusu ya da rolsüz kişi adresi"),
+    ("MX kaydı yok", "adres var, MX kaydı yok"),
+    ("eleme:", "eleme adımı: uygun hedef değil"),
+    ("HALÜSİNASYON", "taslak doğrulamadan geçmedi"),
+    ("taslak doğrulanamadı", "taslak doğrulamadan geçmedi"),
+    ("pipeline:", "sektör ya da rol filtresi"),
+    ("cevap vermedi", "LLM cevap vermedi"),
+    ("taslak üretilemedi", "LLM cevap vermedi"),
+    ("zaman bütçesi", "zaman bütçesi doldu"),
+    ("beklenmeyen hata", "beklenmeyen hata"),
+    ("bekleyen outreach taslağı", "fren: bekleyen taslak sınırı"),
+)
+
+
+def skip_breakdown(skipped) -> list:
+    """Elenenleri sebep grubuna göre sayar: [(grup, adet)], çoktan aza. Tek tek satır
+    okumadan "bugün aday neden düştü" sorusunu cevaplar."""
+    sayim: dict = {}
+    for _, why in skipped:
+        grup = next((g for iz, g in ELEME_GRUPLARI if iz in str(why)), "diğer")
+        sayim[grup] = sayim.get(grup, 0) + 1
+    return sorted(sayim.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
 def build_report_text(day, profile, drafted, ats, reply_notes, skipped, banner_lines=None,
                       audit_lines=None, send_lines=None, takip_lines=None) -> str:
     """Kullanıcıya gidecek düz-metin günlük rapor. Saf fonksiyon (test edilebilir)."""
@@ -217,6 +248,7 @@ def build_report_text(day, profile, drafted, ats, reply_notes, skipped, banner_l
         lines.append("")
 
     lines.append(f"Elenen/uygunsuz: {len(skipped)} kayıt (ayrıntı: gunluk_ozet/{day}.md).")
+    lines += [f"  {adet:>4}  {grup}" for grup, adet in skip_breakdown(skipped)]
     lines.append("")
     lines.append("— outreachos günlük otomasyonu")
     return "\n".join(lines)
@@ -311,5 +343,14 @@ if __name__ == "__main__":
     dup = [results[0], dict(results[0], link="https://jobs.lever.co/acme/u9")]
     out2 = gather_ats_digest(lambda q: dup if q == ATS_QUERIES[0] else [], lambda t: True, [])
     assert len(out2) == 1, out2
+
+    # skip_breakdown: sebep gruplanır, çoktan aza sıralanır, tanınmayan "diğer"e düşer
+    sk = [("a.io", "sayfalarda e-posta bulunamadı"), ("b.io", "sayfalarda e-posta bulunamadı"),
+          ("c.io", "eleme: yatırım fonu"), ("d.io", "daha önce bounce aldı — adres ölü"),
+          ("e.io", "eleme adımı cevap vermedi"), ("f.io", "bilinmeyen sebep")]
+    assert skip_breakdown(sk) == [("sitede adres yok", 2), ("LLM cevap vermedi", 1),
+                                  ("adresi ölü (bounce)", 1), ("diğer", 1),
+                                  ("eleme adımı: uygun hedef değil", 1)], skip_breakdown(sk)
+    assert "   2  sitede adres yok" in build_report_text("2026-10-04", {}, [], [], [], sk)
 
     print("report self-test: OK")
