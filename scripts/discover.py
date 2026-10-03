@@ -508,9 +508,10 @@ def _address_context(html: str, email: str) -> str:
 def choose_address(seen: dict) -> tuple[str | None, str]:
     """Sitede bulunan adreslerden (adres → çevresindeki metin) yazılacak olanı seçer.
 
-    Sıra: (1) yanında kurucu, mühendislik ya da işe alım rolü geçen isimli kişi, (2) genel kutu
-    (info@, careers@ ...), (3) ad.soyad biçimli kişi adresi. Destek, satış, basın gibi rol
-    kutularına ve rolü bilinmeyen tek kelimelik adreslere yazılmaz. NAMED_CONTACT=0 eski
+    Sıra: (1) yanında kurucu, mühendislik ya da işe alım rolü geçen isimli kişi, (2) başvuru
+    kutusu (careers@, jobs@, people@), (3) genel kutu (info@, hello@). Destek, satış, basın gibi
+    rol kutularına ve yanında rol yazmayan kişi adreslerine yazılmaz: customer.experience@ gibi
+    iki kelimelik rol kutuları ad.soyad adresinden ayırt edilemiyor. NAMED_CONTACT=0 eski
     davranışı (yalnızca genel kutu) geri getirir. Firma başına tek mail kuralı değişmez."""
     def yerel(e: str) -> str:
         return e.split("@")[0].lower()
@@ -528,9 +529,6 @@ def choose_address(seen: dict) -> tuple[str | None, str]:
     if generic:
         return generic[0], ("başvuru kutusu" if yerel(generic[0]) in BASVURU_KUTULARI
                             else "genel kutu")
-    adsoyad =[e for e in kisi if re.search(r"[._-]", yerel(e))]
-    if adsoyad:
-        return adsoyad[0], "isimli kişi, ad.soyad adresi"
     return None, f"yalnızca rol kutusu ya da rolü belirsiz adres bulundu ({sorted(seen)[0]})"
 
 
@@ -1249,7 +1247,7 @@ def main() -> int:
             print(f"  ! takip: durum hesaplanamadı ({type(e).__name__}: {e})")
         try:
             hazir, hazir_sorun = prep.run(state, _get, int(time.time() * 1000), today,
-                                          deliverability.FREE_MAIL)
+                                          deliverability.FREE_MAIL, search_fn=search)
             if hazir:
                 print(f"  ~ takip: görüşme hazırlık notu yazıldı: {', '.join(hazir)}")
             for satir in hazir_sorun:
@@ -1916,7 +1914,7 @@ def _self_test() -> int:
     assert choose_address(ctx_)[0] == "ada@acme.io" and "isimli" in choose_address(ctx_)[1]
     assert choose_address({"ada@acme.io": "", "info@acme.io": ""}) == ("info@acme.io", "genel kutu")
     assert choose_address({"can@acme.io": "can demir, head of sales"})[0] is None
-    assert choose_address({"ada.lovelace@acme.io": ""})[0] == "ada.lovelace@acme.io"
+    assert choose_address({"customer.experience@acme.io": ""})[0] is None   # ad.soyad sanılmaz
     assert choose_address({"ada@acme.io": ""})[0] is None                # rolü belirsiz tek kelime
     assert choose_address({"support@acme.io": "our founder"})[0] is None
     assert choose_address({"press.office@acme.io": ""})[0] is None

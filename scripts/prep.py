@@ -91,7 +91,14 @@ def make_note(firma: str, rec: dict, text: str, profile: dict, call) -> tuple:
     return note, ""
 
 
-def run(state: dict, get_page, now_ms: int, today: str, free_mail=frozenset(), call=None) -> tuple:
+def search_text(search_fn, domain: str) -> str:
+    """Site bulut sunucusuna açılmıyorsa kaynak, arama dizinindeki kendi sayfa özetleridir."""
+    rows = search_fn(f"site:{domain}") or []
+    return " ".join(f"{r.get('title', '')}. {r.get('snippet', '')}" for r in rows).strip()[:6000]
+
+
+def run(state: dict, get_page, now_ms: int, today: str, free_mail=frozenset(), call=None,
+        search_fn=None) -> tuple:
     """Bekleyen davetler için not üretir, kayda yazar.
     Döner: (notu yazılan firmalar, yazılamayanlar için "firma: sebep" satırları)."""
     if call is None:
@@ -102,6 +109,8 @@ def run(state: dict, get_page, now_ms: int, today: str, free_mail=frozenset(), c
     for firma, rec in pending(state.get("companies_already_contacted", {}), now_ms):
         key = autosend.target_key(rec["email"], free_mail)
         text = "" if "@" in key else site_text(get_page, key)
+        if not text and search_fn and "@" not in key:
+            text = search_text(search_fn, key)
         note, neden = (make_note(firma, rec, text, state.get("profile", {}), call) if text
                        else (None, "site açılmadı"))
         if note:
@@ -178,6 +187,11 @@ if __name__ == "__main__":
     for _ in range(MAX_DENEME - 1):
         assert run(st, page, now, "2026-10-04", frozenset({"gmail.com"}), fake)[0] == []
     assert [f for f, _ in pending(cc, now)] == []                                # hak bitti
+    cc["gecmis"]["yanit_ms"] = now - GUN_MS                        # sitesi açılmayan firma
+    ara = lambda q: [{"title": "Gecmis", "snippet": "40 hotels, 20,000 rooms"}] if "gecmis.io" in q else []  # noqa: E731
+    assert run(st, page, now, "2026-10-04", frozenset({"gmail.com"}), fake, ara)[0] == ["gecmis"]
+    cc["gecmis"]["yanit_ms"] = now - 40 * GUN_MS
+    cc["gecmis"].pop("hazirlik")
     satir = report_lines(cc, "2026-10-04")
     assert satir[0].startswith("Görüşme hazırlığı, acme:") and len(satir) == 3, satir
     assert report_lines(cc, "2026-10-05") == []

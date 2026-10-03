@@ -115,12 +115,12 @@ haftada iki gün. Başvuranın aradığı rol state'teki `profile.targeting` ala
 **Hangi adrese yazılır (`choose_address`).** Sitede birden çok adres varsa sıra şudur:
 1. Yanında kurucu, mühendislik ya da işe alım rolü yazan isimli kişi (`ada@`, sayfada
    "Co-Founder & CTO" ile birlikte geçiyorsa). Adresin çevresindeki metne bakılır.
-2. Genel kutu. İçlerinde başvuru için açılmış olanlar (`careers@`, `jobs@`, `people@`,
-   `talent@`) `info@` ve `hello@` kutularının önüne geçer.
-3. `ad.soyad@` biçimli kişi adresi (genel kutu yoksa).
+2. Başvuru kutusu (`careers@`, `jobs@`, `people@`, `talent@`).
+3. Diğer genel kutular (`info@`, `hello@`, `contact@`).
 
-Destek, satış, basın, hukuk gibi rol kutularına ve rolü belirsiz tek kelimelik adreslere
-yazılmaz; yanında satış ya da pazarlama rolü geçen kişi de atlanır. Yalnızca genel kutu
+Destek, satış, basın, hukuk gibi rol kutularına ve yanında rol yazmayan kişi adreslerine
+yazılmaz (`customer.experience@` gibi iki kelimelik rol kutuları `ad.soyad@` adresinden
+ayırt edilemiyor); yanında satış ya da pazarlama rolü geçen kişi de atlanır. Yalnızca genel kutu
 bulunduysa `/team` ve `/about` sayfalarına da bir kez bakılır. Kişi adresi de aynı iki
 koşula tabidir: şirketin kendi sitesinde yayınlanmış olmalı ve tahmin edilmemelidir. Firma
 başına tek mail kuralı değişmez (mükerrer kapısı domain düzeyindedir). `NAMED_CONTACT=0`
@@ -378,7 +378,9 @@ kayıtlardan türetilir. Elle işaretlenen bir alan yoktur; kullanıcıya soru s
 - **Görüşme hazırlığı (`prep.py`).** Son 14 günde görüşme daveti gelen her firma için bir kez
   hazırlık notu yazılır: şirket ne yapıyor, profilden uyan noktalar, sorulabilecekler,
   adayın sorabilecekleri. Girdi firmanın ana sayfası, profil ve gelen yanıtın özetidir.
-  Bot kimliğini reddeden site için sayfa tarayıcı başlıklarıyla bir kez daha istenir.
+  Bot kimliğini reddeden site için sayfa tarayıcı başlıklarıyla bir kez daha istenir; site
+  bulut sunucusuna hiç açılmıyorsa kaynak, arama dizinindeki kendi sayfa özetleri olur
+  (`site:<domain>` sorgusu).
   Sitede ve profilde geçmeyen bir sayı içeren not atılır (taslaklardaki `numeric_check`).
   Not kayda `hazirlik` olarak yazılır, o günün raporuna ve `takip.md`'ye girer. Dört
   başarısız denemeden sonra (site açılmıyor, not denetimden dönüyor) bırakılır.
