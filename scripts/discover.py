@@ -622,6 +622,15 @@ def draft_exists(draft_id: str, token: str) -> bool | None:
     return True if code == 200 else (False if code == 404 else None)
 
 
+def owned_pending(parsed_drafts: list, state: dict, missed: int = 0) -> int:
+    """Bekleyen-taslak freninin saydığı sayı: yalnızca motorun kendi açtığı taslaklar
+    (state'te draft_id'si kayıtlı olanlar). Okunamayan taslağın (missed) kimin olduğu
+    bilinmediği için o da sayılır: eksik taramada üretim temkinli tarafta kalır."""
+    bizim = {v.get("draft_id") for v in state.get("companies_already_contacted", {}).values()
+             if isinstance(v, dict) and v.get("draft_id")}
+    return sum(1 for d in parsed_drafts if d["id"] in bizim) + missed
+
+
 def confirmed_vetoes(queued_ids: set, live_ids: set, scan_complete: bool, exists_fn) -> set:
     """Kuyruktayken kullanıcının sildiği (veto ettiği) taslakların id'leri.
 
@@ -1034,6 +1043,14 @@ def main() -> int:
             existing_draft_domains(token, own)
         if draft_domains:
             print(f"  ~ {len(draft_domains)} mevcut taslak domaini — aynı firmaya 2. taslak açılmayacak")
+        # Fren yalnızca motorun KENDİ taslaklarını sayar. Kayıtsız taslaklara (kullanıcının
+        # elle yazdıkları, kaydı bilerek silinmiş eskiler) motor dokunamaz; onlar sayılırsa
+        # bekleyen sayısı hiç MAX_PENDING_DRAFTS'ın altına inmez ve üretim kalıcı durur.
+        toplam_taslak = pending_count
+        pending_count = owned_pending(parsed_drafts, state, draft_scan_missed)
+        if toplam_taslak != pending_count:
+            print(f"  ~ fren {pending_count} kayıtlı taslağı sayıyor "
+                  f"(Gmail'de toplam {toplam_taslak} taslak var)")
         # scan_sent + taslak listesi hazır: gönderilmeden silinen taslakların firmalarını
         # havuza geri al. contacted/seen_domains kümeleri AŞAĞIDA kuruluyor, o yüzden burada.
         # Taslak taraması eksikse bu adım atlanır — eksik liste 'silinmiş' sanılır.
@@ -1626,6 +1643,12 @@ def _self_test() -> int:
     assert confirmed_vetoes({"Q1", "Q2", "Q3", "Q4"}, {"Q1"}, True, durum.get) == {"Q2", "Q3", "Q4"}
     assert confirmed_vetoes({"Q1", "Q2", "Q3", "Q4"}, {"Q1"}, False, durum.get) == {"Q3"}
     assert confirmed_vetoes({"Q1"}, {"Q1"}, False, durum.get) == set()
+
+    # fren yalnızca motorun kayıtlı taslaklarını sayar; okunamayan taslak temkinli sayılır
+    st_own = {"companies_already_contacted": {"a": {"draft_id": "D1"}, "b": {"draft_id": None}}}
+    assert owned_pending([{"id": "D1"}, {"id": "X9"}], st_own) == 1
+    assert owned_pending([{"id": "X9"}], st_own, missed=3) == 3
+    assert owned_pending([], {}) == 0
 
     # --- Serper cevabı doğru ayrıştırılıyor mu (ağa çıkmadan) ---
     # CSE'den geçerken sessizce yanlış alan adı okumak, aramanın haftalarca
