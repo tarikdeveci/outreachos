@@ -113,15 +113,23 @@ haftada iki gün. Başvuranın aradığı rol state'teki `profile.targeting` ala
 
 **Asla tahmin yok.** `info@<domain>` uydurmak bounce üretir; bounce itibar yakar.
 **Hangi adrese yazılır (`choose_address`).** Sitede birden çok adres varsa sıra şudur:
-1. Yanında kurucu, mühendislik ya da işe alım rolü yazan isimli kişi (`ada@`, sayfada
-   "Co-Founder & CTO" ile birlikte geçiyorsa). Adresin çevresindeki metne bakılır.
+1. Yanında adı soyadı ve kurucu, mühendislik ya da işe alım unvanı yazan kişi (`ada@`,
+   sayfada "Ada Lovelace, Co-Founder & CTO" ile birlikte geçiyorsa). Adresin çevresindeki
+   metne bakılır; düz kelime değil unvan aranır.
 2. Başvuru kutusu (`careers@`, `jobs@`, `people@`, `talent@`).
 3. Diğer genel kutular (`info@`, `hello@`, `contact@`).
 
-Destek, satış, basın, hukuk gibi rol kutularına ve yanında rol yazmayan kişi adreslerine
-yazılmaz (`customer.experience@` gibi iki kelimelik rol kutuları `ad.soyad@` adresinden
-ayırt edilemiyor); yanında satış ya da pazarlama rolü geçen kişi de atlanır. Yalnızca genel kutu
-bulunduysa `/team` ve `/about` sayfalarına da bir kez bakılır. Kişi adresi de aynı iki
+Destek, satış, basın, hukuk gibi rol kutularına ve yanında adı ya da unvanı yazmayan
+adreslere yazılmaz (`customer.experience@` ve `accommodations@` gibi kutular kişi adresinden
+başka türlü ayırt edilemiyor); yanında satış ya da pazarlama rolü geçen kişi de atlanır.
+
+**Hangi sayfalara bakılır.** Ana sayfa, iletişim, hakkında ve kariyer yolları; yazılabilir bir
+kutu çıkmadıysa yasal sayfalar (`/privacy`, `/privacy-policy`, `/imprint`, `/impressum`).
+Arama, yazılabilir bir adres bulunana kadar sürer: ilk sayfada yalnızca `support@` görüp
+durmaz. İletişim sayfası form olan şirketlerin genel kutusu çoğu zaman yalnızca yasal sayfada
+yazar; oradaki kişi adresi (veri sorumlusu) seçilmez. 144 gerçek sitede bu iki değişiklik
+adresi bulunan aday sayısını 29'dan 44'e çıkardı. Yalnızca genel kutu bulunduysa `/team` ve
+`/about` sayfalarına da bir kez bakılır. Kişi adresi de aynı iki
 koşula tabidir: şirketin kendi sitesinde yayınlanmış olmalı ve tahmin edilmemelidir. Firma
 başına tek mail kuralı değişmez (mükerrer kapısı domain düzeyindedir). `NAMED_CONTACT=0`
 eski davranışı (yalnızca genel kutu) geri getirir.
@@ -167,6 +175,15 @@ bakılır. LLM metriği gözden kaçırabiliyor; bu kaçırmıyor.
 
 `verify` reddederse taslak **bir kez** düzeltme şansıyla yeniden yazdırılır; yine kirliyse
 şirket atlanır. **Şüphedeyken göndermemek, göndermekten iyidir.**
+
+**Modele giden site metni (`drafting.page_text`).** Script, stil, svg ve yorum blokları
+atılır, meta açıklama başa alınır. Yalnızca etiketler silinirken 142 gerçek sitenin 107'sinde
+modele giden ilk 3000 karakter font tanımı ve izleme koduydu: `judge` şirketi "metin bozuk"
+diye düşürüyor, `draft` şirketin ne yaptığını görmeden yazıyordu.
+
+**Eleme dökümü (`report.skip_breakdown`).** Rapor, günlük özet ve kuru deneme logu elenen
+adayları sebep grubuna göre sayar (sitede adres yok, yalnızca rol kutusu, daha önce yazıldı,
+eleme adımı ...). Toplam sayı tek başına hangi kapının aday düşürdüğünü göstermiyordu.
 
 **Role göre CV linki.** Profilde `cv_links` (anahtar → link) varsa `draft` şirketin işine en
 uygun CV'nin anahtarını seçer; linki gövdenin sonuna kod ekler (`attach_cv`). Linki model
