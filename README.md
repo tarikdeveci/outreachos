@@ -176,6 +176,7 @@ Windows PowerShell: `$env:SEARCH_API_KEY="..."`
 - ❌ **Şirketlere** gönderim varsayılan olarak kapalı: outreach sadece taslak. ✅ Günlük rapor yalnızca **senin kendi adresine** gider (`send_self_report`, dış adrese asla).
 - ⚙️ `AUTO_SEND=1` bilinçli bir tercihtir ve kendi zinciri vardır: yalnızca içerik denetiminden ✅ geçmiş, bir gün veto penceresinde beklemiş ve MX'i yeniden doğrulanmış taslak gönderilir; günlük sert tavan uygulanır.
 - ⚙️ `AUTO_REPAIR_DELETE=1` taslakları **kalıcı** siler (çöp kutusu yok). Sadece onarılamayan ve mükerrer taslaklar için; kapalıyken motor hiçbir taslağı silmez.
+- ✅ **Aynı yere ikinci mail gitmez:** gönderimden hemen önce son bir kapı alıcıyı aynı run'a, kalıcı gönderim kaydına ve Gmail Gönderilenler'e (tarih sınırı olmadan) karşı yeniden sorar. Daha önce mail gitmişse taslak gönderilmez; Gmail'e sorulamazsa da gönderilmez, sonraki run yeniden dener.
 - ✅ Motor yalnızca **kendi açtığı** taslaklara dokunur: Gmail'de elle yazdığın taslaklar onarılmaz, silinmez, gönderilmez (raporda "motorun kaydında yok" diye sayılır).
 - ❌ CAPTCHA otomatik geçilmez; LinkedIn'de otomatik mesaj atılmaz (hazır arama linki verilir, mesajı sen atarsın).
 - ❌ Kişisel tanıdık şirketleri (`excluded_companies_seed_personal`) pipeline'a girmez — Kişisel/Bekleyen sekmesinde manuel karar bekler.
@@ -202,8 +203,10 @@ Bounce alan adres `email_dead` işaretlenir, o domain bir daha denenmez. Küçü
 (12 gönderimden az) fren devreye girmez; Gmail okunamazsa "ölçülemedi" olur ve **fren
 uygulanmaz** (fail-open).
 
-**Bekleyen taslak triyajı:** her run taslakları ✅ gönder / 🔁 sil (mükerrer) / ⚠️ düzelt /
-👀 elle bak diye etiketleyip rapora yazar. Kararlar gövde, profil ve denetim kurallarının
+**Bekleyen taslak triyajı:** her run taslakları ✅ temiz / 🔁 mükerrer / ⚠️ içerik hatası /
+👀 kararsız diye etiketleyip rapora yazar. Etiketler sana iş vermez: mükerreri ve içerik
+hatasını otomatik onarım çözer, kararsız taslak sonraki run'da yeniden denetlenir ve yine
+kararsız kalırsa onarıma gider. Kararlar gövde, profil ve denetim kurallarının
 hash'iyle cache'lenir; kurallar değişince eski kararlar kendiliğinden tazelenir.
 
 **Opsiyonel: otomatik onarım** (`AUTO_REPAIR=1`, varsayılan **kapalı**): ⚠️ damgalı

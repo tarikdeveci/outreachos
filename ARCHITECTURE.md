@@ -246,10 +246,10 @@ Her run, Gmail'deki bekleyen taslakları denetleyip dört karardan biriyle etike
 
 | | Anlamı |
 |---|---|
-| ✅ **GÖNDER** | Mükerrer değil + içerik doğrulandı |
-| 🔁 **SİL** | Bu firmaya Gönderilenler'de zaten mail var |
-| ⚠️ **DÜZELT** | İçerik denetimi desteklenmeyen iddia buldu |
-| 👀 **ELLE BAK** | Otomatik doğrulanamadı — güvenli varsayılmaz |
+| ✅ **TEMİZ** | Mükerrer değil + içerik doğrulandı; veto kuyruğuna girer |
+| 🔁 **MÜKERRER** | Bu firmaya zaten mail gitmiş (Gönderilenler ya da kalıcı kayıt); onarım siler |
+| ⚠️ **İÇERİK HATASI** | İçerik denetimi desteklenmeyen iddia buldu; onarım yeniden yazar |
+| 👀 **KARARSIZ** | Doğrulama karar veremedi. Güvenli varsayılmaz; sonraki run yeniden denetler, yine kararsızsa içerik hatası sayılıp onarıma gider (kullanıcıya iş kalmaz) |
 | ⏳ **SIRADA** | Run'ın LLM kotası doldu, sonraki run'da |
 
 Maliyet kontrolü: karar, **gövde + profil + denetim kurallarının sürümü** hash'iyle
@@ -286,6 +286,15 @@ alınamaz: iki turda onarılamayan taslak ve Gönderilenler'de karşılığı ol
 verir. Silinen onarılamayan taslağın firması, taslak Gönderilenler taramasının ulaştığı
 tarih aralığındaysa aday havuzuna geri döner (yeni bir taslak şansı); mükerrerin firması
 dönmez (zaten mail gitmiş).
+
+**Son kapı (mükerrer gönderim):** `send_draft` çağrılmadan hemen önce
+`autosend.duplicate_check` alıcıyı sırayla aynı run'da gönderilenlere, kalıcı kayda
+(`autosend_sent` ve gönderim kanallı `companies_already_contacted` kayıtları), bugünkü
+Gönderilenler taramasına ve Gmail'in kendisine (`in:sent to:<domain>`, tarih penceresi
+yok) sorar. Anahtar kurumsal adreste domain, ücretsiz postada adresin kendisidir. Denetimin
+🔁 kararı Gönderilenler'in son 200 mesajına dayandığı için tek başına yetmez. Yakalanan
+taslak kuyruktan düşer ve kaydına `sent_confirmed` yazılır (sonraki denetim onu 🔁 sayar);
+Gmail cevap vermezse taslak gönderilmez, kuyrukta kalır.
 
 **Sahiplik filtresi:** onarım, silme ve otomatik gönderim yalnızca motorun kendi açtığı
 taslaklara dokunur (`companies_already_contacted` içinde `draft_id`'si kayıtlı olanlar).

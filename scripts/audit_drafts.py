@@ -9,7 +9,8 @@ boşaltır, sayı düşer, üretim yeniden açılır. Kilit ancak böyle çözü
   🔁 MUKERRER — bu firmaya Gönderilenler'de zaten mail var → tekrar gönderme, sil.
   ⚠ ICERIK   — profile karşı doğrulama uydurma/desteklenmeyen iddia yakaladı → düzelt.
   ✅ GUVENLI  — mükerrer değil, içerik temiz → gönderebilirsin.
-  👀 INCELE   — içerik otomatik doğrulanamadı (LLM yok) → elle bak; güvenli varsayma.
+  👀 INCELE   — içerik otomatik doğrulanamadı (LLM yok) → güvenli varsayma; sonraki run
+               yeniden denetler, yine kararsızsa onarıma gider (kullanıcıya iş kalmaz).
 
 GÜVENLİK: bu modül OKUR ve RAPORLAR; kendisi göndermez, düzeltmez, silmez. Kararları
 kullanan iki ayrı katman var ve ikisi de kendi anahtarıyla açılır: autosend.py (AUTO_SEND)
@@ -36,8 +37,9 @@ EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 SAFE, DUPLICATE, CONTENT, REVIEW, PENDING = "GUVENLI", "MUKERRER", "ICERIK", "INCELE", "BEKLEMEDE"
 _EMOJI = {SAFE: "✅", DUPLICATE: "🔁", CONTENT: "⚠", REVIEW: "👀", PENDING: "⏳"}
-_LABEL = {SAFE: "GÖNDER", DUPLICATE: "SİL (mükerrer)", CONTENT: "DÜZELT",
-          REVIEW: "ELLE BAK", PENDING: "SIRADA (sonraki run)"}
+# Etiketler durumu söyler, kullanıcıya iş vermez: ne yapıldığını onarım ve gönderim blokları yazar.
+_LABEL = {SAFE: "TEMİZ", DUPLICATE: "MÜKERRER", CONTENT: "İÇERİK HATASI",
+          REVIEW: "KARARSIZ (yeniden denetlenecek)", PENDING: "SIRADA (sonraki run)"}
 
 
 def body_hash(body: str) -> str:
@@ -125,16 +127,27 @@ def content_verdict(verify_result, numeric_problem) -> tuple:
     if numeric_problem:
         problems.append(numeric_problem)
     if verify_result is None:
-        # LLM cevap vermedi — repo ilkesi: şüphedeyken güvenli sayma, elle baktır
-        return REVIEW, (problems or ["içerik otomatik doğrulanamadı — göndermeden önce elle oku"])
+        # LLM cevap vermedi. Repo ilkesi: şüphedeyken güvenli sayma, sonraki run yeniden denetler
+        return REVIEW, (problems or ["içerik otomatik doğrulanamadı: sonraki run'da yeniden "
+                                     "denetlenecek, o zamana kadar gönderilmez"])
     if verify_result.get("temiz") is not True:
         sorunlar = [str(x) for x in (verify_result.get("sorunlar") or [])]
         if not sorunlar and not problems:
             # "temiz değil" ama sebep yok (ya da alan hiç yok): bozuk cevap. Güvenli sayılırsa
             # gönderilir, içerik hatası sayılırsa onarıma ve silmeye gider; ikisi de yanlış.
-            return REVIEW, ["doğrulama sebep vermeden reddetti: göndermeden önce elle oku"]
+            return REVIEW, ["doğrulama sebep vermeden reddetti: sonraki run'da yeniden denetlenecek"]
         problems += sorunlar
     return (CONTENT, problems) if problems else (SAFE, [])
+
+
+UNDECIDED_REASON = ("doğrulama iki denemede karar veremedi: yalnızca profilde yazan "
+                    "iddialarla yeniden yazılacak")
+
+
+def undecided(cached, h: str) -> bool:
+    """Bu gövde için cache'teki karar 👀 (kararsız) mı. Kararsız sonuç 'elle bak' diye
+    kullanıcıya bırakılmaz: bir sonraki run yeniden denetler."""
+    return bool(cached and cached.get("hash") == h and cached.get("verdict") == REVIEW)
 
 
 def audit_one(draft: dict, profile: dict, sent_domains: set, verify_fn, numeric_fn,
@@ -151,12 +164,17 @@ def audit_one(draft: dict, profile: dict, sent_domains: set, verify_fn, numeric_
 
     h = verdict_hash(draft.get("body", ""), profile, rules)
     cached = cache.get(draft["id"]) if cache is not None else None
-    if cached and cached.get("hash") == h:
+    kararsiz = undecided(cached, h)
+    if cached and cached.get("hash") == h and not (kararsiz and may_verify and verify_fn):
         verdict, reasons = cached["verdict"], cached["reasons"]
     elif may_verify and verify_fn is not None:
         numeric_problem = numeric_fn(draft["body"], profile) if numeric_fn else None
         vr = verify_fn(draft["body"], profile)
         verdict, reasons = content_verdict(vr, numeric_problem)
+        # İkinci denetim de karar veremedi: iş kullanıcıya kalmaz, taslak onarıma gider
+        # (yeniden yazılır ve doğrulanır; onarılamazsa silinir, firma havuza döner).
+        if kararsiz and vr is not None and verdict == REVIEW:
+            verdict, reasons = CONTENT, [UNDECIDED_REASON]
         # Doğrulama CEVAP VEREMEDİĞİNDE (vr is None) sonucu önbelleğe ALMA: bu bir
         # içerik kararı değil, altyapı hatası (ölü model ID'si, kota, ağ). Cache'lenirse
         # taslak bir daha hiç denetlenmez ve gövdesi değişmediği sürece sonsuza kadar
@@ -181,7 +199,9 @@ def audit(drafts: list, profile: dict, sent_domains: set, verify_fn=None,
         dom = d["domain"]
         is_dup = bool(dom) and dom in sent_domains
         cached = cache.get(d["id"]) if cache is not None else None
-        is_cached = bool(cached and cached.get("hash") == verdict_hash(d.get("body", ""), profile, rules))
+        h = verdict_hash(d.get("body", ""), profile, rules)
+        # Kararsız (👀) sonuç kesin karar değildir: cache'li sayılmaz, yeniden denetlenir.
+        is_cached = bool(cached and cached.get("hash") == h) and not undecided(cached, h)
         may = (not is_dup) and (not is_cached) and (max_verify is None or verified < max_verify)
         if may and verify_fn is not None:
             verified += 1
@@ -210,8 +230,8 @@ def summary_lines(verdicts: list, max_list: int = 40) -> list:
         return ["📋 Bekleyen taslak yok — backlog temiz."]
     c = counts(verdicts)
     head = (f"📋 Bekleyen {len(verdicts)} taslak triyajı: "
-            f"✅{c[SAFE]} gönder · 🔁{c[DUPLICATE]} sil · ⚠{c[CONTENT]} düzelt · "
-            f"👀{c[REVIEW]} elle bak · ⏳{c[PENDING]} sırada")
+            f"✅{c[SAFE]} temiz · 🔁{c[DUPLICATE]} mükerrer · ⚠{c[CONTENT]} içerik hatası · "
+            f"👀{c[REVIEW]} kararsız · ⏳{c[PENDING]} sırada")
     lines = [head]
     shown = 0
     for verdict in (DUPLICATE, CONTENT, REVIEW, SAFE, PENDING):   # önce eylem gerektirenler
@@ -305,6 +325,29 @@ if __name__ == "__main__":
     c = counts(res)
     assert c == {SAFE: 1, DUPLICATE: 1, CONTENT: 1, REVIEW: 1, PENDING: 0}, c
 
+    # kararsız (👀) taslak kullanıcıya kalmaz: bir kez daha denetlenir, yine kararsızsa
+    # içerik hatası sayılıp onarıma gider; arada düzelirse temiz çıkar
+    bos = {"temiz": False, "sorunlar": []}                  # sebepsiz ret: bozuk cevap
+    d4 = [{"id": "u", "to": "x@u.io", "domain": "u.io", "subject": "s", "body": "gövde u"}]
+    cache4, calls4 = {}, {"n": 0}
+
+    def flaky(_b, _p):
+        calls4["n"] += 1
+        return bos
+    assert audit(d4, profile, set(), flaky, numeric_fn, cache4)[0]["verdict"] == REVIEW
+    assert audit(d4, profile, set(), flaky, numeric_fn, cache4, max_verify=0)[0]["verdict"] == REVIEW
+    assert calls4["n"] == 1                                  # kota yoksa eski sonuç gösterilir
+    r4 = audit(d4, profile, set(), flaky, numeric_fn, cache4)[0]
+    assert r4["verdict"] == CONTENT and r4["reasons"] == [UNDECIDED_REASON], r4
+    audit(d4, profile, set(), flaky, numeric_fn, cache4)
+    assert calls4["n"] == 2                                  # onarıma gitti, artık cache'ten
+    cache5: dict = {}
+    audit(d4, profile, set(), flaky, numeric_fn, cache5)
+    assert audit(d4, profile, set(), lambda _b, _p: clean, numeric_fn, cache5)[0]["verdict"] == SAFE
+    audit(d4, profile, set(), flaky, numeric_fn, cache5 := {})
+    assert audit(d4, profile, set(), lambda _b, _p: None, numeric_fn, cache5)[0]["verdict"] == REVIEW
+    assert cache5["u"]["verdict"] == REVIEW                  # LLM susarsa sayaç ilerlemez
+
     # max_verify: kota dolunca fazlası BEKLEMEDE (cache'lenmez, sonraki run'da denetlenir)
     fresh = [{"id": f"m{i}", "to": f"x@m{i}.io", "domain": f"m{i}.io", "subject": "s",
               "body": f"gövde {i}"} for i in range(5)]
@@ -318,5 +361,5 @@ if __name__ == "__main__":
     assert len(cache3) == 2                                   # sadece doğrulananlar cache'lendi
 
     lines = summary_lines(res)
-    assert any("triyaj" in l for l in lines) and any("SİL" in l for l in lines)
+    assert any("triyaj" in l for l in lines) and any("MÜKERRER" in l for l in lines)
     print("audit_drafts self-test: OK")

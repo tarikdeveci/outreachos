@@ -698,6 +698,20 @@ def send_draft(draft_id: str, token: str) -> str | None:
         return None
 
 
+def sent_count_to(target: str, token: str) -> int | None:
+    """(gmail.readonly) Gönderilenler'de bu hedefe (domain ya da adres) giden mail var mı:
+    sayı / None (cevap alınamadı). Tarih penceresi yok, yani scan_sent'in göremediği eski
+    gönderimi de bulur. None 'yok' DEĞİLDİR; çağıran onu gönderim izni saymamalı."""
+    raw = gmail_get("https://gmail.googleapis.com/gmail/v1/users/me/messages?"
+                    + urlencode({"q": f"in:sent to:{target}", "maxResults": 1}), token)
+    if not raw:
+        return None
+    try:
+        return len(json.loads(raw).get("messages", []))
+    except json.JSONDecodeError:
+        return None
+
+
 def gmail_search(query: str, token: str, limit: int = 25) -> list[dict]:
     """(gmail.readonly) Sorguya uyan mesajların başlıklarını döndürür."""
     url = ("https://gmail.googleapis.com/gmail/v1/users/me/messages?"
@@ -1054,6 +1068,10 @@ def main() -> int:
     if token and parsed_drafts:
         sent_domains = {e.split("@")[-1] for (e, _ms) in sent_events
                         if deliverability.is_outreach_recipient(e, own)}
+        # Kalıcı kayıt da sayılır: scan_sent son 200 mesajı okur, daha eski gönderim oradan
+        # düşer ama state'te (autosend_sent, gönderim kanallı kayıtlar) durur.
+        sent_domains |= {k for k in autosend.sent_keys(state, deliverability.FREE_MAIL)
+                         if "@" not in k}
         audit_cache = state.setdefault("draft_audit", {})
         # Eski run'larda doğrulama hatası bir içerik kararıymış gibi cache'lenmişti;
         # o kayıtlar gövde değişmediği için bir daha hiç denetlenmezdi. Artık böyle bir
@@ -1157,7 +1175,11 @@ def main() -> int:
         # olarak düşer — ama kullanıcıya yanlış liste gösterir ve MX'i ölü adres sonsuza dek
         # kuyruğa girip düşmeye devam eder).
         islenen: set = set()
+        engellenen: list = []       # son kapının durdurdukları (aynı yere ikinci mail)
         if allowed and not DRY_RUN:
+            guncel = {r["id"]: r for r in audit_results}
+            bilinen = autosend.sent_keys(state, deliverability.FREE_MAIL)
+            run_keys: set = set()
             # Denetim sırası bugün gelmeyen (⏳) taslak 'temiz değil' DEĞİLDİR: kuyrukta
             # kalır, sırası gelen run'da gönderilir. Gönderim hakkını da harcamaz.
             for item in [i for i in bekleyen if i["id"] not in sirada_ids][:send_cap]:
@@ -1166,10 +1188,30 @@ def main() -> int:
                     islenen.add(item["id"])
                     print(f"    x {item['to']} — yeniden denetimde temiz çıkmadı, gönderilmedi")
                     continue
+                # Alıcı kuyruğa girdikten sonra değiştirilmiş olabilir: kapılar ve gönderim
+                # kaydı taslağın BUGÜNKÜ adresine bakar, kuyruktaki eski kopyaya değil.
+                r = guncel[item["id"]]
+                item = {**item, "to": r.get("to") or item["to"],
+                        "domain": r.get("domain") or item["domain"]}
                 if item["domain"] and not mx_ok(item["domain"]):   # bounce koruması
                     autosend.drop(state, {item["id"]})
                     islenen.add(item["id"])
                     print(f"    x {item['to']} — MX kaybolmuş (ölü adres), gönderilmedi")
+                    continue
+                # Son kapı: bu yere daha önce mail gittiyse hiçbir koşulda ikincisi gitmez.
+                karar, neden = autosend.duplicate_check(
+                    item, bilinen, sent_domains, run_keys,
+                    live_fn=lambda k: sent_count_to(k, token),
+                    free_mail=deliverability.FREE_MAIL)
+                if karar == "bilinmiyor":           # kuyrukta kalır, sonraki run yeniden sorar
+                    print(f"    ~ {item['to']}: {neden}, bu run'da gönderilmedi")
+                    continue
+                if karar == "engel":
+                    autosend.drop(state, {item["id"]})
+                    islenen.add(item["id"])
+                    autosend.mark_sent_confirmed(state, item["id"], today)
+                    engellenen.append({**item, "why": neden})
+                    print(f"    x {item['to']}: {neden}, gönderilmedi")
                     continue
                 mid = send_draft(item["id"], token)
                 if mid:
@@ -1177,6 +1219,7 @@ def main() -> int:
                     autosend.drop(state, {item["id"]})
                     islenen.add(item["id"])
                     gonderilen.append(item)
+                    run_keys.add(autosend.target_key(item["to"], deliverability.FREE_MAIL))
                     print(f"    ✉ gönderildi: {item['company']} ({item['to']})")
         # Bugün onaylananları yarına kuyrukla — kullanıcı raporda görüp veto edebilsin.
         kuyrukta = {i["id"] for i in state.get(autosend.QUEUE_KEY, [])} | islenen | vetolu
@@ -1185,7 +1228,8 @@ def main() -> int:
         if yeni_kuyruk and not DRY_RUN:
             autosend.enqueue(state, yeni_kuyruk, today)
         send_lines = autosend.summary_lines(bekleyen, gonderilen, yeni_kuyruk,
-                                            allowed, send_reasons, send_cap, unowned=yabanci)
+                                            allowed, send_reasons, send_cap, unowned=yabanci,
+                                            blocked=engellenen)
         for ln in send_lines:
             print(ln)
 
