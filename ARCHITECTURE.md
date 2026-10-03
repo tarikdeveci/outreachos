@@ -157,6 +157,11 @@ bakılır. LLM metriği gözden kaçırabiliyor; bu kaçırmıyor.
 `verify` reddederse taslak **bir kez** düzeltme şansıyla yeniden yazdırılır; yine kirliyse
 şirket atlanır. **Şüphedeyken göndermemek, göndermekten iyidir.**
 
+**Role göre CV linki.** Profilde `cv_links` (anahtar → link) varsa `draft` şirketin işine en
+uygun CV'nin anahtarını seçer; linki gövdenin sonuna kod ekler (`attach_cv`). Linki model
+yazmaz: uzun bir adresi kopyalarken bozabilir. Anahtar geçersizse link eklenmez. Run
+logundaki `cv:<anahtar>` eki hangi CV'nin seçildiğini gösterir.
+
 ### Gerçek vakalar (bu yüzden bu kadar paranoyayız)
 - Model, profilde hiç olmayan *"fizyoterapi platformunda ürün geliştirdim"* cümlesini kurdu
   ve mail gerçek bir şirkete gitti. → `verify` adımı bu yüzden ayrıldı.

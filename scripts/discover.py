@@ -1180,9 +1180,12 @@ def main() -> int:
         except Exception as e:                              # noqa: BLE001
             print(f"  ! takip: durum hesaplanamadı ({type(e).__name__}: {e})")
         try:
-            hazir = prep.run(state, _get, int(time.time() * 1000), today, deliverability.FREE_MAIL)
+            hazir, hazir_sorun = prep.run(state, _get, int(time.time() * 1000), today,
+                                          deliverability.FREE_MAIL)
             if hazir:
                 print(f"  ~ takip: görüşme hazırlık notu yazıldı: {', '.join(hazir)}")
+            for satir in hazir_sorun:
+                print(f"  ~ takip: hazırlık notu yazılamadı, {satir}")
         except Exception as e:                              # noqa: BLE001
             print(f"  ! takip: hazırlık notu yazılamadı ({type(e).__name__}: {e})")
         health = deliverability.assess(
@@ -1476,7 +1479,9 @@ def main() -> int:
                             "hedef_kisiler": hedef[:3],
                             "linkedin_mesaji": verdict.get("linkedin_mesaji", "")})
             n = len(drafted)
-        print(f"  + {d} → {email} ({'taslak ' + str(draft_id) if draft_id else 'DRY_RUN'}) [{n}/{run_target}]")
+        cv = verdict.get("cv") if "\nCV: " in verdict.get("govde", "") else "yok"
+        print(f"  + {d} → {email} ({'taslak ' + str(draft_id) if draft_id else 'DRY_RUN'}) "
+              f"[{n}/{run_target}] cv:{cv}")
         if n >= run_target:
             dur.set()
 

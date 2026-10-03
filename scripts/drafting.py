@@ -65,7 +65,8 @@ def _call(model: str, system: str, user: str, max_tokens: int = 1500) -> dict | 
         print(f"    ! {model} JSON döndürmedi (stop_reason={stop}): {text[:160]!r}")
         return None
     try:
-        return json.loads(text[s:e + 1])
+        # strict=False: model gövdedeki satır sonunu kaçışsız yazınca taslak boşa gidiyordu.
+        return json.loads(text[s:e + 1], strict=False)
     except json.JSONDecodeError as err:
         print(f"    ! {model} JSON ayrıştırılamadı (stop_reason={stop}, {err}): "
               f"{text[s:s + 160]!r}")
@@ -121,9 +122,12 @@ DRAFT_SYSTEM = (
     "60-84 makul, 60 altı zayıf) + tek cümlelik skor_gerekce.\n"
     "- hedef_kisiler: LinkedIn'de MESAJ atılacak 1-3 ROL ünvanı (ör. 'Head of AI', "
     "'Engineering Manager', 'Technical Recruiter'). GERÇEK İSİM/E-POSTA UYDURMA, sadece rol.\n"
-    "- linkedin_mesaji: LinkedIn için 1-2 cümlelik kısa bağlantı notu (aynı uydurma-yok kuralı).\n\n"
+    "- linkedin_mesaji: LinkedIn için 1-2 cümlelik kısa bağlantı notu (aynı uydurma-yok kuralı).\n"
+    "- cv: profilde 'cv_links' varsa, şirketin işine ve aranan role en uygun CV'nin ANAHTARI "
+    "(cv_links içindeki anahtarlardan biri, aynen). CV linkini gövdeye yazma, sistem ekler.\n\n"
     'SADECE şu JSON: {"proje": "...", "konu": "...", "govde": "...", "uygunluk_skoru": 0-100, '
-    '"skor_gerekce": "...", "hedef_kisiler": ["rol1", "rol2"], "linkedin_mesaji": "..."}'
+    '"skor_gerekce": "...", "hedef_kisiler": ["rol1", "rol2"], "linkedin_mesaji": "...", '
+    '"cv": "..."}'
 )
 
 
@@ -140,6 +144,14 @@ def draft(company: dict, site_text: str, profile: dict, sektor: str,
     # 1500 → 4000: aynı model, aynı kesilme riski (bkz. verify). Taslak JSON'u mail
     # gövdesi + skor + hedef roller + LinkedIn notu taşıyor, yani verify'dan uzun.
     return _call(DRAFT_MODEL, DRAFT_SYSTEM, user, max_tokens=4000)
+
+
+def attach_cv(d: dict, profile: dict) -> None:
+    """Modelin seçtiği CV'nin linkini gövdenin sonuna ekler. Linki model yazmaz: uzun bir
+    adresi harf harf kopyalarken bozabilir; seçimi model yapar, metni profil verir."""
+    link = (profile.get("cv_links") or {}).get(str(d.get("cv") or ""))
+    if link and link not in d.get("govde", ""):
+        d["govde"] = d["govde"].rstrip() + f"\n\nCV: {link}"
 
 
 # ---------------------------------------------------------------- 3) doğrulama
@@ -323,6 +335,7 @@ def judge_draft_verify(company: dict, site_text: str, profile: dict,
             return None, "doğrulama adımı cevap vermedi (güvenli tarafta kalındı)"
         if v.get("temiz") and not sayi_sorunu:
             d["sektor"] = sektor
+            attach_cv(d, profile)
             return d, ""
         sorunlar = "; ".join(v.get("sorunlar", []) + ([sayi_sorunu] if sayi_sorunu else []))[:300]
         if deneme == 0:
@@ -380,4 +393,9 @@ if __name__ == "__main__":
                                    repair_fn=lambda b, *a: {"govde": b + " 9000 kullanıcı."},
                                    verify_fn=lambda b, pr: temiz)
     assert y is None and say
+    cvp = {"cv_links": {"ai": "www.ornek.com/cv-ai.pdf", "yazilim": "www.ornek.com/cv-yazilim.pdf"}}
+    t1, t2 = {"govde": "Merhaba.\n", "cv": "ai"}, {"govde": "Merhaba.", "cv": "olmayan"}
+    attach_cv(t1, cvp), attach_cv(t1, cvp), attach_cv(t2, cvp)
+    assert t1["govde"] == "Merhaba.\n\nCV: www.ornek.com/cv-ai.pdf" and t2["govde"] == "Merhaba."
+    assert numeric_check(t1["govde"], prof) is None
     print("drafting self-test: OK")

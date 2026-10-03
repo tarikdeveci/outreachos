@@ -57,42 +57,47 @@ def site_text(get_page, domain: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text)).strip()[:6000]
 
 
-def make_note(firma: str, rec: dict, text: str, profile: dict, call) -> dict | None:
+def make_note(firma: str, rec: dict, text: str, profile: dict, call) -> tuple:
+    """(not, sebep): not None ise sebep neden yazılamadığını söyler."""
     user = (f"ŞİRKET: {firma}\n\nGELEN YANITIN ÖZETİ: {rec.get('yanit_ozet', '')}\n\n"
             f"ADAY PROFİLİ (JSON):\n{json.dumps(profile, ensure_ascii=False)}\n\n"
             f"ŞİRKET SİTESİ:\n{text}")
-    out = call(drafting.DRAFT_MODEL, PREP_SYSTEM, user, 1200)
+    out = call(drafting.DRAFT_MODEL, PREP_SYSTEM, user, 3000)
     if not isinstance(out, dict):
-        return None
+        return None, "model cevap vermedi"
     note = {"sirket": _s(out.get("sirket"))[:400]}
     for alan, n, _baslik in ALANLAR:
         v = out.get(alan)
         note[alan] = [_s(x)[:240] for x in v if _s(x)][:n] if isinstance(v, list) else []
     if not note["sirket"] and not note["uyum"]:
-        return None
+        return None, "model boş not döndürdü"
     duz = " ".join([note["sirket"]] + [x for alan, _n, _b in ALANLAR for x in note[alan]])
-    if drafting.numeric_check(duz, profile, allow=f"{firma} {text}"):
-        return None                       # sitede ve profilde olmayan bir sayı: uydurma riski
-    return note
+    sayi = drafting.numeric_check(duz, profile, allow=f"{firma} {text}")
+    if sayi:
+        return None, f"uydurma denetimi: {sayi}"[:120]   # sitede ve profilde olmayan sayı
+    return note, ""
 
 
-def run(state: dict, get_page, now_ms: int, today: str, free_mail=frozenset(), call=None) -> list:
-    """Bekleyen davetler için not üretir, kayda yazar; notu yazılan firmaların adını döndürür."""
+def run(state: dict, get_page, now_ms: int, today: str, free_mail=frozenset(), call=None) -> tuple:
+    """Bekleyen davetler için not üretir, kayda yazar.
+    Döner: (notu yazılan firmalar, yazılamayanlar için "firma: sebep" satırları)."""
     if call is None:
         if not os.environ.get("ANTHROPIC_API_KEY"):
-            return []                     # anahtar yokken deneme hakkı harcanmaz
+            return [], []                 # anahtar yokken deneme hakkı harcanmaz
         call = drafting._call
-    done = []
+    done, sorun = [], []
     for firma, rec in pending(state.get("companies_already_contacted", {}), now_ms):
         key = autosend.target_key(rec["email"], free_mail)
         text = "" if "@" in key else site_text(get_page, key)
-        note = make_note(firma, rec, text, state.get("profile", {}), call) if text else None
+        note, neden = (make_note(firma, rec, text, state.get("profile", {}), call) if text
+                       else (None, "site açılmadı"))
         if note:
             rec["hazirlik"] = {"tarih": today, **note}
             done.append(firma)
         else:
             rec["hazirlik_deneme"] = int(rec.get("hazirlik_deneme") or 0) + 1
-    return done
+            sorun.append(f"{firma}: {neden}")
+    return done, sorun
 
 
 def report_lines(contacted: dict, today: str) -> list:
@@ -149,13 +154,14 @@ if __name__ == "__main__":
 
     assert "99" not in site_text(page, "acme.io") and "40 hotels" in site_text(page, "acme.io")
     assert [f for f, _ in pending(cc, now)] == ["acme", "uydur", "kisi"]
-    assert run(st, page, now, "2026-10-04", frozenset({"gmail.com"}), fake) == ["acme"]
+    yazilan, sorunlar = run(st, page, now, "2026-10-04", frozenset({"gmail.com"}), fake)
+    assert yazilan == ["acme"] and len(sorunlar) == 2 and "uydurma" in sorunlar[0], sorunlar
     h = cc["acme"]["hazirlik"]
     assert h["sirket"] == "Oteller için yapay zeka araçları, 40 otelde." and h["uyum"] == ["LifeOS"]
     assert len(h["sorulabilir"]) == 4 and h["sor"] == []
     assert "hazirlik" not in cc["uydur"] and cc["uydur"]["hazirlik_deneme"] == 1   # 250 uydurma
     assert cc["kisi"]["hazirlik_deneme"] == 1                                      # sitesi yok
-    assert run(st, page, now, "2026-10-04", frozenset({"gmail.com"}), fake) == []
+    assert run(st, page, now, "2026-10-04", frozenset({"gmail.com"}), fake)[0] == []
     assert [f for f, _ in pending(cc, now)] == []                                  # hak bitti
     satir = report_lines(cc, "2026-10-04")
     assert satir[0].startswith("Görüşme hazırlığı, acme:") and len(satir) == 3, satir
@@ -165,5 +171,5 @@ if __name__ == "__main__":
     assert markdown({"ret": cc["ret"]}, now) == ""
     os.environ.pop("ANTHROPIC_API_KEY", None)
     cc["acme"].pop("hazirlik")
-    assert run(st, page, now, "2026-10-04") == [] and "hazirlik_deneme" not in cc["acme"]
+    assert run(st, page, now, "2026-10-04") == ([], []) and "hazirlik_deneme" not in cc["acme"]
     print("prep self-test: OK")
