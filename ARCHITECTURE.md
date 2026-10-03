@@ -359,6 +359,12 @@ kayıtlardan türetilir. Elle işaretlenen bir alan yoktur; kullanıcıya soru s
   gelen kayıt başvuru kabul edilir.
 - **Firma durumu (`board.py`).** görüşme, yanıt geldi, otomatik yanıt, ret, gönderildi (yanıt
   yok), taslak bekliyor, bounce, kapandı. Durum her run'da kayıttan yeniden hesaplanır.
+- **Görüşme hazırlığı (`prep.py`).** Son 14 günde görüşme daveti gelen her firma için bir kez
+  hazırlık notu yazılır: şirket ne yapıyor, profilden uyan noktalar, sorulabilecekler,
+  adayın sorabilecekleri. Girdi firmanın ana sayfası, profil ve gelen yanıtın özetidir.
+  Sitede ve profilde geçmeyen bir sayı içeren not atılır (taslaklardaki `numeric_check`).
+  Not kayda `hazirlik` olarak yazılır, o günün raporuna ve `takip.md`'ye girer. İki
+  başarısız denemeden sonra (site açılmıyor, not denetimden dönüyor) bırakılır.
 - **Cevaplanma.** Yanıttan sonra o hedefe Gönderilenler'de mail varsa "cevapladın" sayılır ve
   iş listeden düşer.
 - **Kayıp taslak.** Taslağı Gmail'de olmayan ve gönderildiği bilinmeyen kayıt için Gmail'e
@@ -435,6 +441,7 @@ scripts/autosend.py       veto pencereli gönderim (varsayılan KAPALI)
 scripts/report.py         günlük rapor + ATS digest + LinkedIn hedefleri
 scripts/tracking.py       gelen yanıtı okur ve sınıflar (görüşme, ret, otomatik, gürültü)
 scripts/board.py          takip panosu: firma durumu, bugünün işleri, ilan defteri
+scripts/prep.py           görüşme daveti gelince hazırlık notu (site + profil, uydurma denetimli)
 scripts/refresh_pool.py   aday havuzunu tazeler (elle çalıştırılır)
 scripts/get_gmail_token.py Gmail refresh token → GitHub secret
 
@@ -462,6 +469,7 @@ python scripts/audit_drafts.py
 python scripts/autosend.py
 python scripts/tracking.py
 python scripts/board.py
+python scripts/prep.py
 ```
 Ağ gerektirmezler; mantığı bozarsanız testler bağırır.
 

@@ -47,6 +47,7 @@ import deliverability
 import audit_drafts
 import autosend
 import board
+import prep
 import tracking
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1178,6 +1179,12 @@ def main() -> int:
                 deliverability.FREE_MAIL, today)))
         except Exception as e:                              # noqa: BLE001
             print(f"  ! takip: durum hesaplanamadı ({type(e).__name__}: {e})")
+        try:
+            hazir = prep.run(state, _get, int(time.time() * 1000), today, deliverability.FREE_MAIL)
+            if hazir:
+                print(f"  ~ takip: görüşme hazırlık notu yazıldı: {', '.join(hazir)}")
+        except Exception as e:                              # noqa: BLE001
+            print(f"  ! takip: hazırlık notu yazılamadı ({type(e).__name__}: {e})")
         health = deliverability.assess(
             gmail_search=lambda q: gmail_search(q, token, limit=60), token=token,
             contacted=state.get("companies_already_contacted", {}), sent_events=sent_events,
@@ -1531,10 +1538,13 @@ def main() -> int:
         pano = board.build_board(state, int(time.time() * 1000), sent_events, live_ids,
                                  deliverability.FREE_MAIL, today)
         takip_lines = board.action_lines(pano)
+        kayitlar = state.get("companies_already_contacted", {})
+        takip_lines[-1:-1] = prep.report_lines(kayitlar, today)
         with open(STATE_PATH, "w", encoding="utf-8") as f:   # ilan defteri state'e girdi
             json.dump(state, f, ensure_ascii=False, indent=2)
         with open(os.path.join(DATA_DIR, "takip.md"), "w", encoding="utf-8") as f:
-            f.write(board.board_markdown(pano, today))
+            f.write(board.board_markdown(pano, today)
+                    + prep.markdown(kayitlar, int(time.time() * 1000)))
         print("  ~ " + takip_lines[-1])
     except Exception as e:                                  # noqa: BLE001
         takip_lines = [f"Takip panosu kurulamadı ({type(e).__name__}: {e})"]

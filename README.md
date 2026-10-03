@@ -71,6 +71,7 @@ outreachos/
 │   ├── report.py           # günlük rapor + ATS digest
 │   ├── tracking.py         # gelen yanıtı okur ve sınıflar (görüşme, ret, otomatik, gürültü)
 │   ├── board.py            # takip panosu: firma durumu, bugünün işleri, ilan defteri
+│   ├── prep.py             # görüşme daveti gelince hazırlık notu (site + profil, uydurma denetimli)
 │   ├── refresh_pool.py     # aday havuzunu tazeler
 │   └── get_gmail_token.py  # Gmail refresh token → GitHub secret
 ├── web/index.html          # dashboard arayüzü (Tailwind + Chart.js CDN)
@@ -102,6 +103,7 @@ python scripts/autosend.py
 python scripts/report.py
 python scripts/tracking.py
 python scripts/board.py
+python scripts/prep.py
 python scripts/discover.py --self-test
 ```
 
@@ -240,6 +242,7 @@ python scripts/autosend.py
 python scripts/report.py
 python scripts/tracking.py
 python scripts/board.py
+python scripts/prep.py
 python scripts/discover.py --self-test
 ```
 
