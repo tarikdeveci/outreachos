@@ -28,6 +28,11 @@ STARTUP_ATS_QUERIES = [
     "site:boards.greenhouse.io junior (software engineer OR AI OR machine learning) 2026",
     "site:jobs.ashbyhq.com (junior OR associate) (software OR AI OR product) 2026",
     "site:apply.workable.com junior (developer OR engineer OR AI OR product) 2026",
+    # Ürün sahipliği veren roller (ünvanda junior yazmaz, o yüzden ayrı sorgu)
+    'site:jobs.ashbyhq.com ("product engineer" OR "founding engineer" OR "forward deployed") '
+    "remote 2026",
+    'site:boards.greenhouse.io ("product engineer" OR "associate product manager" OR '
+    '"solutions engineer") (remote OR Europe) 2026',
 ]
 CORPORATE_QUERIES = [
     'site:linkedin.com/jobs junior (software OR AI OR "machine learning" OR data) engineer '
@@ -36,6 +41,9 @@ CORPORATE_QUERIES = [
     'site:kariyer.net (junior OR "yeni mezun") (yazılım OR "yapay zeka" OR backend OR "full stack") mühendis',
     "site:myworkdayjobs.com (graduate OR junior) (software OR AI OR data) engineer 2026",
     "site:jobs.smartrecruiters.com junior (software OR AI OR data) engineer 2026",
+    # Yurt dışı: uzaktan ya da Avrupa merkezli, büyük ve büyüyen şirketler
+    'site:linkedin.com/jobs ("product engineer" OR "associate product manager" OR '
+    '"graduate software engineer") (remote OR Europe OR EMEA OR London OR Berlin) 2026',
 ]
 ATS_QUERIES = STARTUP_ATS_QUERIES + CORPORATE_QUERIES
 

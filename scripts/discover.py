@@ -320,26 +320,76 @@ def search(query: str, num: int = 10) -> list[dict]:
     return res
 
 
-def todays_queries() -> list[str]:
-    """Haftanın gününe göre kaynak rotasyonu — aynı kaynağı her gün tarayınca
-    birkaç günde tükeniyor, bu yüzden gün gün farklı havuzlara giriyoruz."""
-    wd = date.today().weekday()
-    common = ["yeni yatırım alan Türk startup 2026 teknoloji"]
-    by_day = {
-        0: ["İTÜ Çekirdek portföy şirketleri", "Teknopark İstanbul yazılım şirketleri",
-            "Ege Teknopark İzmir yazılım şirketi", "ODTÜ Teknokent yapay zeka şirketi"],
-        1: ["site:ycombinator.com/companies AI hiring", "Work at a Startup junior engineer remote",
-            "YC startup Turkey founder", "site:ycombinator.com/companies climate"],
-        2: ["site:webrazzi.com yatırım turu 2026", "Startups.watch yatırım alan girişim 2026",
-            "Türkiye startup seed yatırım Temmuz 2026"],
-        3: ["site:eu-startups.com raised seed 2026 AI", "site:tech.eu funding round 2026",
-            "European startup hiring remote junior engineer 2026"],
-        4: ["climate tech startup Türkiye karbon yazılım", "ESG sürdürülebilirlik yazılım şirketi Türkiye",
-            "site:producthunt.com AI product 2026", "carbon accounting software startup hiring"],
-        5: ["KWORKS Koç Üniversitesi girişim portföy", "Endeavor Türkiye şirketleri teknoloji"],
-        6: ["TÜBİTAK BiGG destekli girişim yazılım", "Bilkent Cyberpark yazılım şirketi"],
-    }
-    return by_day.get(wd, []) + common
+# Arama rotasyonu. Hedef geniş ağ: yurt dışı ağırlıklı, Türkiye haftada iki gün (Pazartesi,
+# Cuma). Yatırım almış ve büyüyen şirketler (scaleup) ile ürün sahipliği veren roller öne
+# alınır. site: sorguları yalnızca HUBS içindeki kaynaklara atılır: haber sitesi (MEDIA)
+# sonuçları aday sayılmadığı için oraya sorgu atmak boşa kredi harcar.
+QUERIES_BY_WEEKDAY = {
+    0: ["site:webrazzi.com yatırım turu 2026 Seri A",
+        "Türkiye scaleup yazılım şirketi yatırım aldı 2026",
+        "İTÜ Çekirdek portföy şirketleri yapay zeka"],
+    1: ["site:ycombinator.com/companies AI hiring product engineer",
+        "Work at a Startup founding engineer remote",
+        "Series A startup hiring product engineer remote Europe 2026"],
+    2: ["site:eu-startups.com raises Series A 2026 AI",
+        "site:tech.eu Series B funding round 2026 software",
+        "European scaleup hiring remote product engineer 2026"],
+    3: ["site:sifted.eu scaleup raises 2026 hiring",
+        "UK AI startup raises Series A 2026 hiring engineers",
+        "fast growing scaleup hiring forward deployed engineer 2026"],
+    4: ["Endeavor Türkiye scaleup teknoloji şirketleri",
+        "Startups.watch yatırım alan girişim 2026",
+        "Turkish founded startup raises Series A 2026"],
+    5: ["climate tech scaleup hiring software engineer remote 2026",
+        "health tech startup raises Series A 2026 AI",
+        "carbon accounting software startup hiring"],
+    6: ["site:producthunt.com AI product launch 2026",
+        "remote first startup hiring associate product manager 2026",
+        "developer tools startup raises seed 2026 hiring"],
+}
+COMMON_QUERIES = ["startup raises Series A 2026 hiring engineers remote"]
+
+
+def todays_queries(wd: int | None = None) -> list[str]:
+    """Haftanın gününe göre kaynak rotasyonu: aynı kaynağı her gün tarayınca birkaç günde
+    tükeniyor, bu yüzden gün gün farklı havuzlara giriyoruz."""
+    wd = date.today().weekday() if wd is None else wd
+    return QUERIES_BY_WEEKDAY.get(wd, []) + COMMON_QUERIES
+
+
+def _band(raw: str) -> tuple:
+    try:
+        lo, hi = (int(x) for x in raw.split(","))
+    except ValueError:
+        return (20, 300)
+    return (lo, hi) if 0 < lo <= hi else (20, 300)
+
+
+# Hedef ekip büyüklüğü bandı (scaleup). SCALEUP_BAND="20,300" ile değişir.
+SCALEUP_BAND = _band(os.environ.get("SCALEUP_BAND", "20,300"))
+
+
+def candidate_priority(domain: str, c: dict, band: tuple = SCALEUP_BAND) -> tuple:
+    """Aday işleme sırası (küçük anahtar önce işlenir). Kimse elenmez, yalnızca sıra değişir.
+
+    Önce şu an işe alanlar. Onların içinde: ekibi hedef banda (scaleup) düşenler, sonra
+    bandın altındaki ekipler (banda yakın olan önce), sonra bandın biraz üstü, sonra ekibi
+    bilinmeyenler, en sonda çok büyük şirketler: onların genel adresine giden soğuk mail
+    okunmaz, ilanları ATS özetinden gelir. Eskiden en küçük ekip en öndeydi; bir ve iki
+    kişilik şirketler sırayı dolduruyor, büyüyen şirketlere sıra gelmiyordu."""
+    lo, hi = band
+    ekip = c.get("ekip")
+    if not isinstance(ekip, int) or ekip <= 0:
+        kademe, ic = 3, 0
+    elif lo <= ekip <= hi:
+        kademe, ic = 0, ekip
+    elif ekip < lo:
+        kademe, ic = 1, -ekip
+    elif ekip <= hi * 4:
+        kademe, ic = 2, ekip
+    else:
+        kademe, ic = 4, ekip
+    return (0 if c.get("ise_aliyor") else 1, kademe, ic, domain)
 
 
 # ---------------------------------------------------------------- e-posta doğrulama
@@ -1360,17 +1410,12 @@ def main() -> int:
         skipped.append(("(guard)", "; ".join(guard_reasons) or "mail sağlığı guard'ı durdurdu"))
     else:
         with ThreadPoolExecutor(max_workers=WORKERS) as havuz:
-            # Öncelik: (1) şu an işe alan şirketler — soğuk mailin en sıcak hedefi,
-            # (2) küçük ekipler — junior'ın etkisi büyük olur ve info@ adresini
-            # genelde kurucu okur. Alfabetik sıralama 5800 adayda her gün aynı
-            # baştaki isimlere takılmak demekti.
-            def oncelik(kv):
-                _, c = kv
-                ekip = c.get("ekip") if isinstance(c.get("ekip"), int) else 9999
-                return (0 if c.get("ise_aliyor") else 1, ekip, kv[0])
-
+            # Öncelik: şu an işe alanlar, onların içinde scaleup bandındaki ekipler
+            # (candidate_priority). Alfabetik sıralama 5800 adayda her gün aynı baştaki
+            # isimlere takılmak demekti.
             isler = {havuz.submit(isle, d, c): d
-                     for d, c in sorted(cands.items(), key=oncelik)}
+                     for d, c in sorted(cands.items(),
+                                        key=lambda kv: candidate_priority(kv[0], kv[1]))}
             for is_ in as_completed(isler):
                 try:
                     is_.result()
@@ -1659,6 +1704,20 @@ def _self_test() -> int:
     assert owned_pending([{"id": "X9"}], st_own, missed=3) == 3
     assert owned_pending([], {}) == 0
     assert owned_ids(st_own) == {"D1"} and owned_ids({}) == set()
+
+    # --- Arama rotasyonu ve aday önceliği ---
+    assert all(todays_queries(g)[-1] == COMMON_QUERIES[0] and len(todays_queries(g)) > 1
+               for g in range(7))
+    tr_gun = [g for g in range(7)
+              if any("Türk" in q or "Turkish" in q for q in QUERIES_BY_WEEKDAY[g])]
+    assert tr_gun == [0, 4], tr_gun                      # Türkiye haftada iki gün
+    assert _band("20,300") == (20, 300) and _band("x") == (20, 300) and _band("9,3") == (20, 300)
+    havuz_ = {"scale.io": {"ekip": 80, "ise_aliyor": True}, "tek.io": {"ekip": 1, "ise_aliyor": True},
+              "orta.io": {"ekip": 15, "ise_aliyor": True}, "dev.io": {"ekip": 9000, "ise_aliyor": True},
+              "bilinmez.io": {"ise_aliyor": True}, "almiyor.io": {"ekip": 80}}
+    sira = [d for d, _ in sorted(havuz_.items(),
+                                 key=lambda kv: candidate_priority(kv[0], kv[1], (20, 300)))]
+    assert sira == ["scale.io", "orta.io", "tek.io", "bilinmez.io", "dev.io", "almiyor.io"], sira
 
     # --- Serper cevabı doğru ayrıştırılıyor mu (ağa çıkmadan) ---
     # CSE'den geçerken sessizce yanlış alan adı okumak, aramanın haftalarca
