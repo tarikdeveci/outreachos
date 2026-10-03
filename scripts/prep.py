@@ -62,9 +62,7 @@ def site_text(get_page, domain: str) -> str:
            or get_page(f"https://www.{domain}", headers=TARAYICI))
     if not raw:
         return ""
-    text = re.sub(r"<(script|style)\b.*?</\1>", " ", raw.decode("utf-8", errors="replace"),
-                  flags=re.S | re.I)
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text)).strip()[:6000]
+    return drafting.page_text(raw.decode("utf-8", errors="replace"))
 
 
 def make_note(firma: str, rec: dict, text: str, profile: dict, call) -> tuple:

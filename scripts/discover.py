@@ -1497,8 +1497,7 @@ def main() -> int:
             with lock:
                 skipped.append((d, "site açılmadı"))
             return
-        site_text = re.sub(r"<[^>]+>", " ", raw.decode("utf-8", errors="replace"))
-        site_text = re.sub(r"\s+", " ", site_text)[:6000]
+        site_text = drafting.page_text(raw.decode("utf-8", errors="replace"))
 
         email, kanit = find_verified_email(d)
         if not email:

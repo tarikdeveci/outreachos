@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import re
+from html import unescape
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -71,6 +72,29 @@ def _call(model: str, system: str, user: str, max_tokens: int = 1500) -> dict | 
         print(f"    ! {model} JSON ayrıştırılamadı (stop_reason={stop}, {err}): "
               f"{text[s:s + 160]!r}")
         return None
+
+
+# ---------------------------------------------------------------- sayfa metni
+_KOD_BLOGU = re.compile(r"<!--.*?-->|<(script|style|noscript|svg|template)\b.*?</\1\s*>", re.S | re.I)
+_META = re.compile(r"<meta\b[^>]*>", re.I)
+
+
+def page_text(page: str, limit: int = 6000) -> str:
+    """Sayfanın modele verilecek düz metni: script, stil, svg ve yorum blokları atılır,
+    meta açıklama başa alınır.
+
+    Yalnızca etiketler silinince JS ağırlıklı sitelerde modele giden ilk 3000 karakter
+    font tanımı ve izleme koduydu: eleme adımı şirketi "metin bozuk" diye düşürüyor,
+    geçenlerde de mail şirketin ne yaptığını görmeden yazılıyordu."""
+    ozet = ""
+    for tag in _META.findall(page[:60000]):
+        if re.search(r"""(?:name|property)=["'](?:og:)?description["']""", tag, re.I):
+            m = re.search(r"""content=(["'])(.*?)\1""", tag, re.S | re.I)
+            if m and m.group(2).strip():
+                ozet = m.group(2).strip() + ". "
+                break
+    govde = re.sub(r"<[^>]+>", " ", _KOD_BLOGU.sub(" ", page))
+    return re.sub(r"\s+", " ", unescape(ozet + govde)).strip()[:limit]
 
 
 # ---------------------------------------------------------------- 1) eleme
@@ -348,6 +372,13 @@ def judge_draft_verify(company: dict, site_text: str, profile: dict,
 
 # --------------------------------------------------------------------- self-test
 if __name__ == "__main__":
+    sayfa = ('<html><head><title>Acme</title><style>@font-face{font-family:X}</style>'
+             '<meta content="AI tools for hotels &amp; hostels" name="description">'
+             '<script>window.dataLayer=[];function gtag(){}</script></head><body>'
+             '<!-- <div>eski</div> --><svg><path d="M0 0"/></svg><h1>We build &#x27;Acme&#x27;</h1></body></html>')
+    assert page_text(sayfa) == "AI tools for hotels & hostels. Acme We build 'Acme'", page_text(sayfa)
+    assert page_text("<p>" + "a" * 50 + "</p>", limit=10) == "a" * 10
+
     prof = {"projeler": ["Acme Panel"], "metrik": "ortalama 0.56"}
     assert numeric_check("skor 0.56 oldu", prof) is None
     assert numeric_check("150K+ kullanıcı", prof) is not None
