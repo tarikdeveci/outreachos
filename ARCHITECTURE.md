@@ -87,8 +87,13 @@ Havuz ayrı bir scriptle (`refresh_pool.py`) periyodik beslenir; günlük run ha
 
 ### 3.2 Önceliklendirme
 Alfabetik sıra 5800 adayda her gün aynı isimlere takılmak demek. Bunun yerine:
-`(1) şu an işe alıyor mu → (2) ekip küçük mü → (3) domain`. Küçük ekiplerde `info@` adresini
-genelde kurucu okur; junior birinin etkisi de büyük olur.
+`(1) şu an işe alıyor mu → (2) ekip hedef bantta mı → (3) domain` (`candidate_priority`).
+Hedef bant varsayılan olarak 20 ile 300 kişi arasıdır (`SCALEUP_BAND`): büyüyen şirketler öne
+alınır, sonra bandın altındaki ekipler, sonra ekibi bilinmeyenler, en sonda çok büyük şirketler.
+Kimse elenmez, yalnızca sıra değişir. Çok büyük şirketlerin ilanları ATS özetinden gelir.
+
+Arama sorguları haftanın gününe göre döner (`QUERIES_BY_WEEKDAY`): yurt dışı ağırlıklı, Türkiye
+haftada iki gün. Başvuranın aradığı rol state'teki `profile.targeting` alanında durur.
 
 ### 3.3 E-posta doğrulama (bounce'un ilk savunma hattı)
 İki koşul **birden** sağlanmalı:
