@@ -7,6 +7,10 @@
     "portfolio": "seninsiten.com",
     "github": "github.com/kullanici",
     "linkedin": "/in/kullanici",
+    "cv_links": {
+      "ai_ml_rolleri": "www.seninsiten.com/cv-ai.pdf",
+      "yazilim_urun_rolleri": "www.seninsiten.com/cv-yazilim.pdf"
+    },
     "projects": {
       "ProjeAdi": "Projenin kısa açıklaması — hangi teknoloji, ne başardı."
     },

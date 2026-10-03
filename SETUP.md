@@ -44,6 +44,9 @@ sayı mailde geçemez, denetim katmanı da iddiaları bu dosyayla karşılaştı
 
 - `profile.projects`: her proje için ne yaptığınızı ve ölçülebilir sonucu yazın.
 - `profile.role_filters`: hangi unvanların eleneceği (kıdem, alan).
+- `profile.cv_links` (isteğe bağlı): anahtar → CV linki. Birden çok CV'niz varsa anahtarı rolü
+  anlatacak biçimde adlandırın; taslak adımı şirkete uyanı seçer, link mailin sonuna eklenir.
+  Tek CV'niz varsa tek satır yazın, hiç yoksa alanı silin.
 - `excluded_sectors`, `excluded_companies_seed`: hiç yazılmayacak sektör ve şirketler.
 - `excluded_companies_seed_personal`: tanıdığınız şirketler (otomasyon dokunmaz).
 - Abartmayın. Profilde olmayan bir iddia mailde çıkarsa taslak ⚠️ damgası alır.
@@ -199,7 +202,14 @@ onarılmaz, silinmez, gönderilmez.
 → sonra `AUTO_SEND` → en son `AUTO_REPAIR_DELETE`.
 
 Diğer ayarlar: `DAILY_TARGET` (günlük yeni taslak, 12), cron saati (UTC yazılır),
-`BOUNCE_CRITICAL` (bounce bu oranı geçerse yeni outreach durur).
+`BOUNCE_CRITICAL` (bounce bu oranı geçerse yeni outreach durur), `SCALEUP_BAND` (öne alınan
+ekip büyüklüğü aralığı, varsayılan `20,300`), `NAMED_CONTACT` (varsayılan açık: sitede rolüyle
+birlikte yayınlanmış kişi adresi genel kutunun önüne geçer; `0` yazarsanız yalnızca `info@`,
+`careers@` gibi genel kutulara yazılır).
+
+Run'dan sonra veri reponuzda `takip.md` oluşur: kimden yanıt geldi, kime cevap borçlusunuz,
+hangi ilan yeni. Görüşme daveti gelen firma için hazırlık notu da aynı dosyaya ve o günün
+raporuna yazılır. Bunların hiçbiri için bir şey işaretlemeniz gerekmez.
 
 ---
 
