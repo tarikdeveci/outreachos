@@ -474,6 +474,58 @@ def find_career_page(domain: str) -> str | None:
     return None
 
 
+# Kişi olmayan, başvuruyla da ilgisi olmayan kutular: bunlara hiç yazılmaz.
+ROLE_PREFIXES = {
+    "support", "sales", "press", "privacy", "legal", "billing", "security", "abuse", "noreply",
+    "no-reply", "admin", "webmaster", "marketing", "media", "pr", "partners", "partnerships",
+    "investors", "ir", "help", "feedback", "newsletter", "dpo", "gdpr", "compliance", "accounts",
+    "finance", "orders", "events", "office", "service", "business", "enquiries", "inquiries",
+    "booking", "reservations", "mail", "email", "post", "destek", "satis", "basin", "muhasebe",
+    "kvkk", "siparis", "rezervasyon"}
+KISI_ADRESI = re.compile(r"^[a-z]{2,20}(?:[._-][a-z]{2,20})?$")
+KISI_ROLU = re.compile(r"\b(co-?founder|founder|kurucu|ceo|cto|chief|head of|vp|director|direktör|"
+                       r"engineering|talent|recruit\w*|people|hiring|human resources|"
+                       r"insan kaynakları)\b")
+ILGISIZ_ROL = re.compile(r"\b(sales|marketing|support|press|legal|finance|customer|satış|"
+                         r"pazarlama|destek|basın|hukuk|muhasebe)\b")
+NAMED_CONTACT = os.environ.get("NAMED_CONTACT", "1") != "0"
+
+
+def _address_context(html: str, email: str) -> str:
+    """Adresin sayfadaki çevresi (etiketsiz, küçük harf): yanında kimin, hangi rolün yazdığı."""
+    i = html.lower().find(email)
+    if i < 0:
+        return ""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html[max(0, i - 800):i + 300])).lower()
+
+
+def choose_address(seen: dict) -> tuple[str | None, str]:
+    """Sitede bulunan adreslerden (adres → çevresindeki metin) yazılacak olanı seçer.
+
+    Sıra: (1) yanında kurucu, mühendislik ya da işe alım rolü geçen isimli kişi, (2) genel kutu
+    (info@, careers@ ...), (3) ad.soyad biçimli kişi adresi. Destek, satış, basın gibi rol
+    kutularına ve rolü bilinmeyen tek kelimelik adreslere yazılmaz. NAMED_CONTACT=0 eski
+    davranışı (yalnızca genel kutu) geri getirir. Firma başına tek mail kuralı değişmez."""
+    def yerel(e: str) -> str:
+        return e.split("@")[0].lower()
+
+    generic = [e for e in sorted(seen) if yerel(e) in GENERIC_PREFIXES]
+    yasak = ROLE_PREFIXES | set(GENERIC_PREFIXES)
+    kisi = [e for e in sorted(seen) if NAMED_CONTACT and KISI_ADRESI.match(yerel(e))
+            and not set(re.split(r"[._-]", yerel(e))) & yasak
+            and not ILGISIZ_ROL.search(seen[e] or "")]
+    for e in kisi:
+        m = KISI_ROLU.search(seen[e] or "")
+        if m:
+            return e, f"isimli kişi, yanında '{m.group(0)}' yazıyor"
+    if generic:
+        return generic[0], "genel kutu"
+    adsoyad = [e for e in kisi if re.search(r"[._-]", yerel(e))]
+    if adsoyad:
+        return adsoyad[0], "isimli kişi, ad.soyad adresi"
+    return None, f"yalnızca rol kutusu ya da rolü belirsiz adres bulundu ({sorted(seen)[0]})"
+
+
 def find_verified_email(domain: str) -> tuple[str | None, str]:
     """(email, kanıt) — adres şirketin kendi sayfasında geçmiyorsa None döner.
     ASLA info@<domain> gibi bir tahmin üretmez."""
@@ -482,28 +534,36 @@ def find_verified_email(domain: str) -> tuple[str | None, str]:
     # site 8 saniyede yanıt verir; vermiyorsa zaten sıradaki adaya geçmek daha verimli.
     paths = ["", "/contact", "/iletisim", "/contact-us", "/about", "/hakkimizda",
              "/careers", "/kariyer", "/en/contact", "/tr/iletisim"]
-    seen: set[str] = set()
+    seen: dict[str, str] = {}
+
+    def topla(p: str, timeout: int) -> None:
+        html_bytes = _get(f"https://{domain}{p}", timeout=timeout)
+        if not html_bytes:
+            return
+        html = html_bytes.decode("utf-8", errors="replace")
+        for e in extract_emails(html):
+            if e.split("@")[-1].lower().endswith(domain.lower()):
+                seen.setdefault(e, _address_context(html, e))
+
+    bulunan = None
     for p in paths:
-        for scheme in ("https://",):
-            html_bytes = _get(f"{scheme}{domain}{p}", timeout=8)
-            if not html_bytes:
-                continue
-            html = html_bytes.decode("utf-8", errors="replace")
-            for e in extract_emails(html):
-                if e.split("@")[-1].lower().endswith(domain.lower()):
-                    seen.add(e)
-            if seen:
-                break
+        topla(p, 8)
         if seen:
+            bulunan = p
             break
     if not seen:
         return None, "sayfalarda e-posta bulunamadı"
-    generic = [e for e in sorted(seen) if e.split("@")[0].lower() in GENERIC_PREFIXES]
-    if not generic:
-        return None, f"sadece kişiye özel adres bulundu ({sorted(seen)[0]}) — kural gereği kullanılmaz"
+    # İsimli kişi çoğu zaman ekip sayfasındadır; yalnızca genel kutu çıktıysa oraya da bakılır.
+    if NAMED_CONTACT and budget_left() > 600 and "isimli" not in choose_address(seen)[1]:
+        for p in ("/team", "/about"):
+            if p != bulunan:
+                topla(p, 6)
+    email, tur = choose_address(seen)
+    if not email:
+        return None, tur
     if not mx_ok(domain):
-        return None, f"{generic[0]} bulundu ama {domain} MX kaydı yok (ölü domain)"
-    return generic[0], "sitede birebir geçiyor + MX doğrulandı"
+        return None, f"{email} bulundu ama {domain} MX kaydı yok (ölü domain)"
+    return email, f"sitede birebir geçiyor ({tur}) + MX doğrulandı"
 
 
 # ---------------------------------------------------------------- aday toplama
@@ -1481,7 +1541,7 @@ def main() -> int:
             n = len(drafted)
         cv = verdict.get("cv") if "\nCV: " in verdict.get("govde", "") else "yok"
         print(f"  + {d} → {email} ({'taslak ' + str(draft_id) if draft_id else 'DRY_RUN'}) "
-              f"[{n}/{run_target}] cv:{cv}")
+              f"[{n}/{run_target}] cv:{cv} kime:{'kişi' if 'isimli' in kanit else 'genel'}")
         if n >= run_target:
             dur.set()
 
@@ -1840,6 +1900,18 @@ def _self_test() -> int:
     finally:
         _get = gercek_get
     assert hasat_["acme.io"]["olcek"] is True
+
+    # --- adres seçimi: rolü belli isimli kişi > genel kutu > ad.soyad; rol kutusuna yazılmaz ---
+    sayfa_ = ('<div><h3>Ada Lovelace</h3><p>Co-Founder &amp; CTO</p><a href="mailto:ada@acme.io">'
+              'ada@acme.io</a></div><footer>info@acme.io</footer>')
+    ctx_ = {e: _address_context(sayfa_, e) for e in ("ada@acme.io", "info@acme.io")}
+    assert choose_address(ctx_)[0] == "ada@acme.io" and "isimli" in choose_address(ctx_)[1]
+    assert choose_address({"ada@acme.io": "", "info@acme.io": ""}) == ("info@acme.io", "genel kutu")
+    assert choose_address({"can@acme.io": "can demir, head of sales"})[0] is None
+    assert choose_address({"ada.lovelace@acme.io": ""})[0] == "ada.lovelace@acme.io"
+    assert choose_address({"ada@acme.io": ""})[0] is None                # rolü belirsiz tek kelime
+    assert choose_address({"support@acme.io": "our founder"})[0] is None
+    assert choose_address({"press.office@acme.io": ""})[0] is None
 
     # --- Serper cevabı doğru ayrıştırılıyor mu (ağa çıkmadan) ---
     # CSE'den geçerken sessizce yanlış alan adı okumak, aramanın haftalarca

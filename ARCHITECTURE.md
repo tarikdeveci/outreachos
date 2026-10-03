@@ -112,8 +112,18 @@ haftada iki gün. Başvuranın aradığı rol state'teki `profile.targeting` ala
 2. Domainin **MX kaydı** olmalı (DNS-over-HTTPS ile kontrol).
 
 **Asla tahmin yok.** `info@<domain>` uydurmak bounce üretir; bounce itibar yakar.
-Ayrıca kişiye özel adresler (`ahmet@`) kullanılmaz — sadece genel kutular (`info@`,
-`careers@`, `hello@`). Bu hem GDPR açısından hem nezaket açısından doğru.
+**Hangi adrese yazılır (`choose_address`).** Sitede birden çok adres varsa sıra şudur:
+1. Yanında kurucu, mühendislik ya da işe alım rolü yazan isimli kişi (`ada@`, sayfada
+   "Co-Founder & CTO" ile birlikte geçiyorsa). Adresin çevresindeki metne bakılır.
+2. Genel kutu (`info@`, `careers@`, `hello@`).
+3. `ad.soyad@` biçimli kişi adresi (genel kutu yoksa).
+
+Destek, satış, basın, hukuk gibi rol kutularına ve rolü belirsiz tek kelimelik adreslere
+yazılmaz; yanında satış ya da pazarlama rolü geçen kişi de atlanır. Yalnızca genel kutu
+bulunduysa `/team` ve `/about` sayfalarına da bir kez bakılır. Kişi adresi de aynı iki
+koşula tabidir: şirketin kendi sitesinde yayınlanmış olmalı ve tahmin edilmemelidir. Firma
+başına tek mail kuralı değişmez (mükerrer kapısı domain düzeyindedir). `NAMED_CONTACT=0`
+eski davranışı (yalnızca genel kutu) geri getirir.
 
 > Bu kontrol bile yetmiyor: şirketin sitesinde yayınladığı ama **artık kimsenin okumadığı**
 > bir kutu MX'i geçer ama bounce eder. Onu ancak bounce geldikten sonra öğrenebiliyoruz →
