@@ -106,7 +106,11 @@ def budget_left() -> float:
 
 
 GENERIC_PREFIXES = ["info", "hello", "contact", "careers", "kariyer", "jobs",
-                    "hr", "ik", "team", "iletisim", "bilgi", "recruitment", "career"]
+                    "hr", "ik", "team", "iletisim", "bilgi", "recruitment", "career",
+                    "people", "talent", "recruiting", "hiring", "join", "founders", "hi", "hey"]
+# Genel kutular içinde başvuru için açılmış olanlar: info@ ile birlikte bulunursa bunlar seçilir.
+BASVURU_KUTULARI = ("careers", "career", "kariyer", "jobs", "recruitment", "recruiting",
+                    "hiring", "talent", "people", "hr", "ik", "join")
 
 # Şirket sitesi olmayan, sadece "hub" olarak kullanılacak alanlar
 HUBS = ["webrazzi.com", "ycombinator.com", "itucekirdek.com", "startups.watch",
@@ -496,7 +500,9 @@ def _address_context(html: str, email: str) -> str:
     i = html.lower().find(email)
     if i < 0:
         return ""
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html[max(0, i - 800):i + 300])).lower()
+    text = re.sub(r"<[^>]+>", " ", html[max(0, i - 800):i + 300]).lower()
+    # Adreslerin kendisi atılır: people@ kutusu "people" rolüyle kendi kendine eşleşmesin.
+    return re.sub(r"\s+", " ", re.sub(r"\S*@\S*", " ", text))
 
 
 def choose_address(seen: dict) -> tuple[str | None, str]:
@@ -509,7 +515,8 @@ def choose_address(seen: dict) -> tuple[str | None, str]:
     def yerel(e: str) -> str:
         return e.split("@")[0].lower()
 
-    generic = [e for e in sorted(seen) if yerel(e) in GENERIC_PREFIXES]
+    generic = sorted((e for e in seen if yerel(e) in GENERIC_PREFIXES),
+                     key=lambda e: (yerel(e) not in BASVURU_KUTULARI, e))
     yasak = ROLE_PREFIXES | set(GENERIC_PREFIXES)
     kisi = [e for e in sorted(seen) if NAMED_CONTACT and KISI_ADRESI.match(yerel(e))
             and not set(re.split(r"[._-]", yerel(e))) & yasak
@@ -519,8 +526,9 @@ def choose_address(seen: dict) -> tuple[str | None, str]:
         if m:
             return e, f"isimli kişi, yanında '{m.group(0)}' yazıyor"
     if generic:
-        return generic[0], "genel kutu"
-    adsoyad = [e for e in kisi if re.search(r"[._-]", yerel(e))]
+        return generic[0], ("başvuru kutusu" if yerel(generic[0]) in BASVURU_KUTULARI
+                            else "genel kutu")
+    adsoyad =[e for e in kisi if re.search(r"[._-]", yerel(e))]
     if adsoyad:
         return adsoyad[0], "isimli kişi, ad.soyad adresi"
     return None, f"yalnızca rol kutusu ya da rolü belirsiz adres bulundu ({sorted(seen)[0]})"
@@ -1912,6 +1920,11 @@ def _self_test() -> int:
     assert choose_address({"ada@acme.io": ""})[0] is None                # rolü belirsiz tek kelime
     assert choose_address({"support@acme.io": "our founder"})[0] is None
     assert choose_address({"press.office@acme.io": ""})[0] is None
+    assert choose_address({"info@acme.io": "", "jobs@acme.io": ""}) == ("jobs@acme.io", "başvuru kutusu")
+    kutu_ = '<p>Write to <a href="mailto:people@acme.io">people@acme.io</a> or zed@acme.io</p>'
+    ctx_ = {e: _address_context(kutu_, e) for e in ("people@acme.io", "zed@acme.io")}
+    assert "people" not in ctx_["zed@acme.io"]                   # adres metni role sayılmaz
+    assert choose_address(ctx_) == ("people@acme.io", "başvuru kutusu")
 
     # --- Serper cevabı doğru ayrıştırılıyor mu (ağa çıkmadan) ---
     # CSE'den geçerken sessizce yanlış alan adı okumak, aramanın haftalarca

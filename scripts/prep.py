@@ -16,7 +16,7 @@ import drafting
 from tracking import GORUSME, GUN_MS, _day
 
 PREP_GUN = 14        # bundan eski davet için not üretilmez: görüşme büyük olasılıkla geçti
-MAX_DENEME = 2       # site açılmıyor ya da not denetimden dönüyorsa sonsuza dek denenmez
+MAX_DENEME = 4       # site açılmıyor ya da not denetimden dönüyorsa sonsuza dek denenmez
 
 PREP_SYSTEM = (
     "Bir iş görüşmesine hazırlanan adaya kısa bir hazırlık notu yazıyorsun. Yalnızca sana "
@@ -58,7 +58,8 @@ def pending(contacted: dict, now_ms: int, cap: int = 5) -> list:
 def site_text(get_page, domain: str) -> str:
     # Görüşmeye çağıran firmanın tek sayfası okunuyor. Bot kimliğini reddeden site için
     # tarayıcı başlıklarıyla bir kez daha denenir; soğuk taramada bu yapılmaz.
-    raw = get_page(f"https://{domain}") or get_page(f"https://{domain}", headers=TARAYICI)
+    raw = (get_page(f"https://{domain}") or get_page(f"https://{domain}", headers=TARAYICI)
+           or get_page(f"https://www.{domain}", headers=TARAYICI))
     if not raw:
         return ""
     text = re.sub(r"<(script|style)\b.*?</\1>", " ", raw.decode("utf-8", errors="replace"),
@@ -174,8 +175,9 @@ if __name__ == "__main__":
     assert len(h["sorulabilir"]) == 4 and h["sor"] == []
     assert "hazirlik" not in cc["uydur"] and cc["uydur"]["hazirlik_deneme"] == 1   # 250 uydurma
     assert cc["kisi"]["hazirlik_deneme"] == 1                                      # sitesi yok
-    assert run(st, page, now, "2026-10-04", frozenset({"gmail.com"}), fake)[0] == []
-    assert [f for f, _ in pending(cc, now)] == []                                  # hak bitti
+    for _ in range(MAX_DENEME - 1):
+        assert run(st, page, now, "2026-10-04", frozenset({"gmail.com"}), fake)[0] == []
+    assert [f for f, _ in pending(cc, now)] == []                                # hak bitti
     satir = report_lines(cc, "2026-10-04")
     assert satir[0].startswith("Görüşme hazırlığı, acme:") and len(satir) == 3, satir
     assert report_lines(cc, "2026-10-05") == []
