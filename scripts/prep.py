@@ -34,6 +34,10 @@ TARAYICI = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit
             "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en,tr;q=0.8"}
 
 
+def _binlik(s: str) -> str:
+    return re.sub(r"(?<=\d)[.,](?=\d{3}\b)", "", s)
+
+
 def _s(x) -> str:
     return re.sub(r"\s+", " ", re.sub("\\s*[\u2014\u2013]\\s*", ", ", str(x or ""))).strip()
 
@@ -77,7 +81,10 @@ def make_note(firma: str, rec: dict, text: str, profile: dict, call) -> tuple:
     if not note["sirket"] and not note["uyum"]:
         return None, "model boş not döndürdü"
     duz = " ".join([note["sirket"]] + [x for alan, _n, _b in ALANLAR for x in note[alan]])
-    sayi = drafting.numeric_check(duz, profile, allow=f"{firma} {text}")
+    # Sitede "20,000", Türkçe notta "20.000": aynı sayı. Binlik ayracı atılmış hali de sınanır.
+    izin = f"{firma} {text} {_binlik(text)}"
+    sayi = (drafting.numeric_check(duz, profile, allow=izin)
+            and drafting.numeric_check(_binlik(duz), profile, allow=izin))
     if sayi:
         return None, f"uydurma denetimi: {sayi}"[:120]   # sitede ve profilde olmayan sayı
     return note, ""
@@ -150,13 +157,13 @@ if __name__ == "__main__":
     def page(url: str, headers=None):
         if "gecmis" in url or ("acme" in url and not headers):   # acme bot kimliğini reddediyor
             return None
-        return b"<html><script>var x = 99;</script><p>Acme builds AI tools for 40 hotels.</p>"
+        return b"<html><script>var x = 99;</script><p>Acme builds AI tools for 40 hotels, 20,000 rooms.</p>"
 
     def fake(model, system, user, max_tokens):
         if "ŞİRKET: uydur" in user:
             return {"sirket": "250 müşterisi olan bir şirket.", "uyum": ["LifeOS"]}
         return {"sirket": "Oteller için yapay zeka araçları \u2014 40 otelde.", "uyum": ["LifeOS", ""],
-                "sorulabilir": ["a", "b", "c", "d", "e"], "sor": "liste değil"}
+                "sorulabilir": ["20.000 oda için ölçek?", "b", "c", "d", "e"], "sor": "liste değil"}
 
     assert "99" not in site_text(page, "acme.io") and "40 hotels" in site_text(page, "acme.io")
     assert [f for f, _ in pending(cc, now)] == ["acme", "uydur", "kisi"]
