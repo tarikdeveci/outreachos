@@ -205,7 +205,9 @@ Diğer ayarlar: `DAILY_TARGET` (günlük yeni taslak, 12), cron saati (UTC yazı
 `BOUNCE_CRITICAL` (bounce bu oranı geçerse yeni outreach durur), `SCALEUP_BAND` (öne alınan
 ekip büyüklüğü aralığı, varsayılan `20,300`), `NAMED_CONTACT` (varsayılan açık: sitede rolüyle
 birlikte yayınlanmış kişi adresi genel kutunun önüne geçer; `0` yazarsanız yalnızca `info@`,
-`careers@` gibi genel kutulara yazılır).
+`careers@` gibi genel kutulara yazılır), `ATS_ADAY_LIMIT` (yazılacak adresi olmayan
+şirketlerin ilan panosundan başvuru listesine bir run'da girebilecek yeni ilan, varsayılan
+`8`; `0` yazarsanız bu şirketler eskisi gibi atlanır).
 
 Run'dan sonra veri reponuzda `takip.md` oluşur: kimden yanıt geldi, kime cevap borçlusunuz,
 hangi ilan yeni. Görüşme daveti gelen firma için hazırlık notu da aynı dosyaya ve o günün

@@ -85,6 +85,10 @@ def resolve_sent(state: dict, sent: dict, live_drafts, count_fn, free_mail=froze
     return asked
 
 
+def ledger_key(a: dict) -> str:
+    return f"{a['firma']}|{a['title']}".lower()
+
+
 def update_ledger(state: dict, digest: list, today: str, keep_days: int = 30) -> int:
     """Bugünkü ATS ilanlarını deftere işler; yeni olanları `yeni`, başvurulmuş olanları
     `basvuruldu` diye işaretler. Uzun süredir görülmeyen ilan defterden düşer."""
@@ -92,7 +96,7 @@ def update_ledger(state: dict, digest: list, today: str, keep_days: int = 30) ->
     apps = [a for a in state.get(APPS_KEY, {}).values() if a.get("tur") != GURULTU]
     new = 0
     for a in digest:
-        k = f"{a['firma']}|{a['title']}".lower()
+        k = ledger_key(a)
         if k not in led:
             led[k] = {"firma": a["firma"], "title": a["title"], "ilk": today, "basvuru": None}
             a["yeni"] = True
@@ -108,7 +112,7 @@ def update_ledger(state: dict, digest: list, today: str, keep_days: int = 30) ->
         if now - _iso_ms(v.get("son")) > (90 if v.get("basvuru") else keep_days) * GUN_MS:
             del led[k]
     for a in digest:
-        if led.get(f"{a['firma']}|{a['title']}".lower(), {}).get("basvuru"):
+        if led.get(ledger_key(a), {}).get("basvuru"):
             a["basvuruldu"] = True
     return new
 

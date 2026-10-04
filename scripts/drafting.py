@@ -34,12 +34,16 @@ DRAFT_MODEL = os.environ.get("DRAFT_MODEL", "claude-sonnet-5")
 VERIFY_MODEL = os.environ.get("VERIFY_MODEL", "claude-sonnet-5")
 
 
-def _call(model: str, system: str, user: str, max_tokens: int = 1500) -> dict | None:
+def _call(model: str, system: str, user: str, max_tokens: int = 1500,
+          temperature: float | None = None) -> dict | None:
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         return None
-    payload = json.dumps({"model": model, "max_tokens": max_tokens, "system": system,
-                          "messages": [{"role": "user", "content": user}]}).encode()
+    istek = {"model": model, "max_tokens": max_tokens, "system": system,
+             "messages": [{"role": "user", "content": user}]}
+    if temperature is not None:
+        istek["temperature"] = temperature
+    payload = json.dumps(istek).encode()
     req = Request("https://api.anthropic.com/v1/messages", data=payload,
                   headers={"x-api-key": key, "anthropic-version": "2023-06-01",
                            "content-type": "application/json"})
@@ -104,19 +108,25 @@ JUDGE_SYSTEM = (
     "hedefi mi karar vermek.\n"
     "GENİŞ DAVRAN: yazılım geliştiren, dijital ürünü olan, teknoloji üreten her "
     "şirket uygundur (robotik, IoT, biyoteknoloji yazılımı, enerji, lojistik, "
-    "endüstriyel SaaS, e-ticaret altyapısı dahil).\n"
+    "endüstriyel SaaS, e-ticaret altyapısı, tüketici ve sosyal uygulamalar, fintech, "
+    "ödeme ve kart ürünleri, pazaryeri, oyun dahil). Ürününü bir uygulama ya da platform "
+    "üzerinden sunan şirket, sattığı şey yazılım olmasa da (kart, sigorta, teslimat, "
+    "topluluk) teknoloji şirketidir.\n"
     "SADECE şunlara uygun=false ver: (a) hiç yazılım/teknoloji üretmeyen işletme, "
-    "(b) savunma sanayi veya siber güvenlik ürünü, (c) şirket değil (dernek, "
-    "üniversite, haber sitesi, yatırım fonu), (d) metin şirketin ne yaptığını "
-    "anlamaya yetmeyecek kadar boş/bozuk.\n"
+    "(b) ANA ürünü savunma sanayi ya da siber güvenlik olan şirket (güvenlik, genel amaçlı "
+    "bir ürünün kullanım alanlarından ya da özelliklerinden yalnızca biriyse uygundur), "
+    "(c) şirket değil (dernek, üniversite, haber sitesi, yatırım fonu), (d) metin şirketin "
+    "ne yaptığını anlamaya yetmeyecek kadar boş/bozuk.\n"
+    "Kararsız kaldığında uygun=true ver.\n"
     'SADECE şu JSON: {"uygun": true/false, "gerekce": "...", "sektor": "..."}'
 )
 
 
 def judge(company: dict, site_text: str) -> dict | None:
+    # temperature 0: sınırdaki şirket bir run'da geçip ertesi gün elenmesin.
     return _call(JUDGE_MODEL, JUDGE_SYSTEM,
                  f"ŞİRKET: {company['domain']}\nSite metni:\n{site_text[:3000]}",
-                 max_tokens=400)
+                 max_tokens=400, temperature=0)
 
 
 # ---------------------------------------------------------------- 2) yazma
@@ -128,7 +138,9 @@ DRAFT_SYSTEM = (
     "Bir alana 'ilgi duymak' ile o alanda 'deneyim sahibi olmak' farklı şeylerdir — "
     "profilde deneyim yoksa ilgi olarak yaz, deneyim gibi sunma.\n"
     "Profildeki bir metriği çarpıtma: 'ortalama 0.56, pik 0.81' ise pik değeri tek "
-    "başına başlık yapma. Emin değilsen sayıyı hiç yazma.\n\n"
+    "başına başlık yapma. Emin değilsen sayıyı hiç yazma. Şirket hakkında sayı "
+    "yazacaksan yalnızca site metninde geçen sayıyı, oradaki haliyle yaz; site metninde "
+    "olmayan bir sayıyı şirkete de yakıştırma.\n\n"
     "ZAMAN KİPİ: Bugünün tarihi veriliyor. Bitiş tarihi geçmiş işleri geçmiş zamanla "
     "yaz ('stajımda çalıştım'), 'şu anda çalışıyorum' deme. Mezuniyet geçtiyse "
     "'mezunuyum' de.\n"
@@ -234,6 +246,38 @@ def strip_urls(body: str) -> str:
     return URL_RE.sub(" ", body or "")
 
 
+def binlik(s: str) -> str:
+    """Binlik ayracını atar: sitede '20,000', Türkçe metinde '20.000' aynı sayıdır."""
+    return re.sub(r"(?<=\d)[.,](?=\d{3}\b)", "", s or "")
+
+
+def foreign_numbers(body: str, profile: dict, allow: str = "") -> list:
+    """Gövdede geçip ne profilde ne de `allow` metninde bulunan sayılar (yazıldığı haliyle)."""
+    prof_text = json.dumps(profile, ensure_ascii=False).lower()
+    # Sayı bütün olarak eşleşmeli: sitedeki '100,000' gövdedeki '100'e, '4.9' da '9'a izin vermez.
+    allow_nums = set()
+    for t in re.findall(r"\d[\d.,]*", allow or ""):
+        allow_nums |= {t.rstrip(".,"), binlik(t.rstrip(".,"))}
+    out = []
+    for raw in NUM_RE.findall(strip_urls(body)):
+        tok = raw.strip().rstrip(".,").lower().replace(" ", "")
+        if not tok or tok in NUM_WHITELIST:
+            continue
+        digits = tok.rstrip("%k+mbinmilyon").rstrip(".,")
+        duz = binlik(digits)
+        if not digits or digits in NUM_WHITELIST or digits in allow_nums or duz in allow_nums:
+            continue
+        # Sınır kontrolü rakam ve noktaya bakar, VİRGÜLE bakmaz.
+        #   - rakam komşusu engellenmeli: '500' aranırken 'ISO 50001' eşleşmemeli
+        #   - nokta komşusu engellenmeli: '56' aranırken '0.56' eşleşmemeli
+        #   - virgül engellenMEmeli: profilde 'ISO 14064, GHG' yazıyorken '14064'
+        #     aranınca virgül yüzünden eşleşme reddediliyordu (yanlış alarm)
+        if not any(re.search(rf"(?<![\d.]){re.escape(x)}(?![\d.])", prof_text)
+                   for x in {digits, duz}):
+            out.append(raw.strip())
+    return out
+
+
 def numeric_check(body: str, profile: dict, allow: str = "") -> str | None:
     """Profilde geçmeyen bir sayı varsa sebebini döndürür.
 
@@ -241,26 +285,14 @@ def numeric_check(body: str, profile: dict, allow: str = "") -> str | None:
     metriği gözden kaçırıyor, bu kontrol kaçırmıyor. '150K+ aylık etkin
     kullanıcı' uydurmasını yakalayan buydu.
 
-    allow: firmanın adı ya da domaini. İçindeki rakamlar iddia değil isimdir:
-    '83sciences.ai' firmasına yazılan her taslak '83' yüzünden uydurma sayılıp eleniyordu.
+    allow: içindeki sayılar iddia sayılmayan metin. Firmanın adı ya da domaini
+    ('83sciences.ai' firmasına yazılan her taslak '83' yüzünden uydurma sayılıp eleniyordu)
+    ve şirketin kendi sitesinin metni: model siteyi okuyup 'sitenizdeki 100,000 kullanıcı'
+    yazınca şirketin kendi sayısı uydurma sayılıyordu. Binlik ayracı farkı ('20,000' ve
+    '20.000') eşleşmeyi bozmaz.
     """
-    prof_text = json.dumps(profile, ensure_ascii=False).lower()
-    allow_nums = set(re.findall(r"\d+", allow or ""))
-    for raw in NUM_RE.findall(strip_urls(body)):
-        tok = raw.strip().rstrip(".,").lower().replace(" ", "")
-        if not tok or tok in NUM_WHITELIST:
-            continue
-        digits = tok.rstrip("%k+mbinmilyon").rstrip(".,")
-        if not digits or digits in NUM_WHITELIST or digits in allow_nums:
-            continue
-        # Sınır kontrolü rakam ve noktaya bakar, VİRGÜLE bakmaz.
-        #   - rakam komşusu engellenmeli: '500' aranırken 'ISO 50001' eşleşmemeli
-        #   - nokta komşusu engellenmeli: '56' aranırken '0.56' eşleşmemeli
-        #   - virgül engellenMEmeli: profilde 'ISO 14064, GHG' yazıyorken '14064'
-        #     aranınca virgül yüzünden eşleşme reddediliyordu (yanlış alarm)
-        if not re.search(rf"(?<![\d.]){re.escape(digits)}(?![\d.])", prof_text):
-            return f"profilde olmayan sayı: '{raw.strip()}'"
-    return None
+    yabanci = foreign_numbers(body, profile, allow)
+    return f"profilde olmayan sayı: '{yabanci[0]}'" if yabanci else None
 
 
 def rules_version() -> str:
@@ -347,18 +379,23 @@ def judge_draft_verify(company: dict, site_text: str, profile: dict,
 
     sektor = j.get("sektor", "")
     duzeltme = ""
+    alan = str(company.get("domain", ""))
     for deneme in range(2):                      # bir kez düzeltme şansı
         d = draft(company, site_text, profile, sektor, today, duzeltme)
         if not d or not d.get("govde"):
             return None, "taslak üretilemedi"
-        # Deterministik sayı denetimi önce — ucuz ve kesin.
-        sayi_sorunu = numeric_check(d["govde"], profile, str(company.get("domain", "")))
+        # Deterministik sayı denetimi önce: ucuz ve kesin. Modelin gördüğü site metnindeki
+        # sayılar şirketin kendi sayısıdır; başvuranın iddialarını verify() profile bağlar.
+        sayi_sorunu = numeric_check(d["govde"], profile, f"{alan} {site_text[:3000]}")
 
         v = verify(d["govde"], profile)
         if v is None:
             return None, "doğrulama adımı cevap vermedi (güvenli tarafta kalındı)"
         if v.get("temiz") and not sayi_sorunu:
             d["sektor"] = sektor
+            # Site sayesinde geçen sayılar kayda yazılır: bekleyen taslak denetimi siteyi
+            # görmez, bu izin olmadan ertesi gün aynı sayıyı uydurma sayıp taslağı bozardı.
+            d["sayi_izni"] = " ".join(foreign_numbers(d["govde"], profile, alan))
             attach_cv(d, profile)
             return d, ""
         sorunlar = "; ".join(v.get("sorunlar", []) + ([sayi_sorunu] if sayi_sorunu else []))[:300]
@@ -388,6 +425,15 @@ if __name__ == "__main__":
     assert numeric_check("Company42 için 97 müşteri", prof, "company42.com") is not None
     # URL içindeki sayı iddia değildir
     assert numeric_check("bkz https://x.io/url?ust=1790242035715000&sa=E", prof) is None
+    # Şirketin sitesinde yazan sayı serbesttir (binlik ayracı ve ek farkıyla); yazmayan değil
+    site = "acme.io Trusted by 100,000 users in 12 countries. 700K+ downloads, rated 4.9"
+    for metin in ("100.000 kullanıcınız", "100,000 users", "12 ülkede", "700k+ indirme", "4.9 puan"):
+        assert numeric_check(metin, prof, site) is None, metin
+    assert numeric_check("150K+ kullanıcı, 12 ülke", prof, site) == "profilde olmayan sayı: '150K+'"
+    for metin in ("100 kullanıcı", "9 puan", "70 indirme"):               # parçası izin vermez
+        assert numeric_check(metin, prof, site) is not None, metin
+    assert foreign_numbers("12 ülkede 100,000 kullanıcı, skor 0.56", prof, "acme.io") == ["12", "100,000"]
+    assert numeric_check("12 ülkede 100,000 kullanıcı", prof, "acme.io 12 100,000") is None
 
     assert rules_version() == rules_version() and len(rules_version()) == 8
 

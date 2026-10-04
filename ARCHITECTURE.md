@@ -134,6 +134,18 @@ koşula tabidir: şirketin kendi sitesinde yayınlanmış olmalı ve tahmin edil
 başına tek mail kuralı değişmez (mükerrer kapısı domain düzeyindedir). `NAMED_CONTACT=0`
 eski davranışı (yalnızca genel kutu) geri getirir.
 
+**Adres yoksa ilan panosu (`report.find_board`, `board_candidates`).** Yazılabilir adresi
+çıkmayan adayın okunan sayfalarında Greenhouse, Lever, Ashby ya da Workable panosuna giden
+bağlantı aranır. Varsa açık ilanlar panonun herkese açık ilan API'sinden okunur ve rol
+filtresinden geçirilir: kıdem ve sert eleme kuralları aynen geçerlidir, ayrıca başlığın
+`role_categories_include` içindeki bir kategoriye oturması gerekir (panonun tamamı okunduğu
+için "açıkça elenmedi" yetmez). Uyan ilanı olan şirket `judge` ve sektör filtresinden de
+geçerse ilanları "sen başvur" listesine girer: şirket başına en fazla 2 ilan (giriş seviyesi
+olanlar önce), run başına en fazla `ATS_ADAY_LIMIT` (8) yeni ilan. Defterde bekleyen şirket
+yeniden elemeye sokulmaz, ilanı tazelenir. İlan rapora yalnızca ilk görüldüğü gün girer,
+açık kaldığı sürece `takip.md`'de durur. Ölçüm: öncelik sırasındaki ilk 120 adayın 37'sinde
+adres, 23'ünde pano vardı; 10'unun panosunda role uyan ilan açıktı (16 ilan).
+
 > Bu kontrol bile yetmiyor: şirketin sitesinde yayınladığı ama **artık kimsenin okumadığı**
 > bir kutu MX'i geçer ama bounce eder. Onu ancak bounce geldikten sonra öğrenebiliyoruz →
 > §5'teki geri besleme döngüsü bu yüzden var.
@@ -170,8 +182,20 @@ Tek çağrıda "değerlendir + yaz + kendini denetle" demek **çalışmıyor**. 
 | `draft` | Sonnet | Maili yaz (sadece elemeden geçenler için) |
 | `verify` | Sonnet | "Bu metindeki her iddianın profilde karşılığı var mı?" — **bağımsız göz** |
 
-Artı **deterministik sayı denetimi**: metindeki her sayı profilde geçiyor mu diye regex ile
-bakılır. LLM metriği gözden kaçırabiliyor; bu kaçırmıyor.
+Artı **deterministik sayı denetimi**: metindeki her sayı profilde ya da modelin okuduğu site
+metninde geçiyor mu diye regex ile bakılır. LLM metriği gözden kaçırabiliyor; bu kaçırmıyor.
+Site metni şirketin kendi sayıları içindir ("sitenizdeki 100,000 kullanıcı"): sayı bütün
+olarak eşleşmelidir (`100,000` gövdedeki `100`e izin vermez), binlik ayracı farkı (`20,000`
+ve `20.000`) eşleşmeyi bozmaz. Başvuranın kendi iddialarını profile bağlayan kat `verify`
+olmaya devam eder. Site sayesinde geçen sayılar kayda `sayi_izni` olarak yazılır: bekleyen
+taslak denetimi ve onarım siteyi görmez, bu izin olmadan aynı sayıyı ertesi gün uydurma
+sayardı.
+
+**Eleme ölçütü (`JUDGE_SYSTEM`).** Geniş tutulur: yazılım geliştiren ya da ürününü bir
+uygulama üzerinden sunan her şirket hedeftir (tüketici ve sosyal uygulamalar, fintech, kart
+ürünleri dahil). Savunma ve siber güvenlik dışlaması şirketin ana ürününe bakar; güvenlik
+genel amaçlı bir ürünün kullanım alanlarından biriyse şirket elenmez. Çağrı `temperature=0`
+ile yapılır: sınırdaki şirket bir run'da geçip ertesi gün elenmesin.
 
 `verify` reddederse taslak **bir kez** düzeltme şansıyla yeniden yazdırılır; yine kirliyse
 şirket atlanır. **Şüphedeyken göndermemek, göndermekten iyidir.**
@@ -407,7 +431,8 @@ kayıtlardan türetilir. Elle işaretlenen bir alan yoktur; kullanıcıya soru s
   `in:sent to:<hedef>` sorulur (run başına en fazla 60 kayıt). Mail gittiyse `sent_confirmed`
   yazılır (mükerrer kapısı da bunu görür), gitmediyse `gonderim_soruldu` yazılır ve bir daha
   sorulmaz.
-- **İlan defteri (`ats_ledger`).** ATS özetindeki ilanlar günden güne taşınır; ilk kez görülen
+- **İlan defteri (`ats_ledger`).** ATS özetindeki ve adayların kendi panolarından gelen (§3.3)
+  ilanlar günden güne taşınır; ilk kez görülen
   ilan raporda `[YENİ]` etiketi alır. Konu satırında başvuru geçen mailler ayrı bir deftere
   (`applications_seen`) yazılır; firmanın adı bir başvuru mailinde geçiyorsa ilan kapanır ve
   listeden düşer. 30 gün görülmeyen ilan defterden silinir.

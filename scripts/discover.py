@@ -48,6 +48,7 @@ import audit_drafts
 import autosend
 import board
 import prep
+import report
 import tracking
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -70,6 +71,8 @@ BUDGET_SEC = int(os.environ.get("BUDGET_SEC", "2400"))       # 40 dk
 # Paralel işçi sayısı. Darboğaz HTTP beklemesi olduğu için thread yeterli;
 # çok yükseltmek hedef sitelere karşı saldırgan olur ve rate-limit yer.
 WORKERS = int(os.environ.get("WORKERS", "6"))
+# Adresi olmayan adayların ilan panosundan başvuru listesine bir run'da girebilecek yeni ilan.
+ATS_ADAY_LIMIT = int(os.environ.get("ATS_ADAY_LIMIT", "8"))
 DELIVER_WINDOW_DAYS = int(os.environ.get("DELIVER_WINDOW_DAYS", "30"))
 BOUNCE_WATCH = float(os.environ.get("BOUNCE_WATCH", "0.03"))
 BOUNCE_CRITICAL = float(os.environ.get("BOUNCE_CRITICAL", "0.06"))
@@ -230,11 +233,12 @@ SCALEUP_DIRECTORIES = [
 
 
 # ---------------------------------------------------------------- http
-def _get(url: str, headers: dict | None = None, timeout: int = 20) -> bytes | None:
+def _get(url: str, headers: dict | None = None, timeout: int = 20,
+         limit: int = 400_000) -> bytes | None:
     req = Request(url, headers={"User-Agent": UA, **(headers or {})})
     try:
         with urlopen(req, timeout=timeout) as r:
-            return r.read(400_000)          # sayfa başına 400KB tavan
+            return r.read(limit)            # sayfa başına 400KB tavan
     except (HTTPError, URLError, TimeoutError, OSError):
         return None
 
@@ -542,9 +546,10 @@ def choose_address(seen: dict) -> tuple[str | None, str]:
     return None, f"yalnızca rol kutusu ya da rolü belirsiz adres bulundu ({sorted(seen)[0]})"
 
 
-def find_verified_email(domain: str) -> tuple[str | None, str]:
+def find_verified_email(domain: str, panolar: list | None = None) -> tuple[str | None, str]:
     """(email, kanıt) — adres şirketin kendi sayfasında geçmiyorsa None döner.
-    ASLA info@<domain> gibi bir tahmin üretmez."""
+    ASLA info@<domain> gibi bir tahmin üretmez. `panolar` verilirse okunan sayfalarda
+    görülen ilk ATS panosu (tür, ad) oraya eklenir: adres çıkmazsa başvuru yolu odur."""
     # Kısa timeout bilinçli: ölü/yavaş sitelerde 10 yol × 20s = tek şirket için
     # 200 saniye ediyordu ve run'ı zaman aşımına sokuyordu. Gerçekten çalışan bir
     # site 8 saniyede yanıt verir; vermiyorsa zaten sıradaki adaya geçmek daha verimli.
@@ -562,6 +567,8 @@ def find_verified_email(domain: str) -> tuple[str | None, str]:
         if not html_bytes:
             return
         html = html_bytes.decode("utf-8", errors="replace")
+        if panolar is not None and not panolar and report.find_board(html):
+            panolar.append(report.find_board(html))
         for e in extract_emails(html):
             if e.split("@")[-1].lower().endswith(domain.lower()):
                 seen.setdefault(e, "" if p in yasal else _address_context(html, e))
@@ -1187,7 +1194,6 @@ def main() -> int:
 
     sys.path.insert(0, HERE)
     import drafting                                     # noqa: E402
-    import report                                       # noqa: E402  self-report + ATS digest
     import repair                                       # noqa: E402  bekleyen taslak onarımı
     today = date.today().isoformat()
 
@@ -1321,10 +1327,16 @@ def main() -> int:
         # LLM çağrısını sonucu hiç kullanılmayacak işe harcıyor, kayıtlı taslağı sıraya
         # düşürüyor ve raporu yüzlerce "sırada" satırıyla dolduruyordu.
         bizim = owned_ids(state)
+        # Taslak yazılırken şirketin sitesinden alınan sayılar kayıtta durur (sayi_izni):
+        # denetim ve onarım siteyi görmez, bu izin olmadan o sayıyı uydurma sayardı.
+        izin = {str(v.get("email", "")).split("@")[-1].lower(): v["sayi_izni"]
+                for v in state.get("companies_already_contacted", {}).values()
+                if isinstance(v, dict) and v.get("sayi_izni")}
         audit_results = audit_drafts.audit(
             [d for d in parsed_drafts if d["id"] in bizim], profile, sent_domains,
             verify_fn=(None if DRY_RUN else drafting.verify),
-            numeric_fn=drafting.numeric_check,
+            numeric_fn=lambda body, prof, alan="": drafting.numeric_check(
+                body, prof, f"{alan} {izin.get(alan, '')}"),
             cache=audit_cache, max_verify=AUDIT_MAX_VERIFY, rules=rules)
 
         # Onarım, silme ve otomatik gönderim YALNIZCA motorun kendi açtığı taslaklara dokunur
@@ -1346,7 +1358,7 @@ def main() -> int:
                 audit_results, onarilabilir, state, audit_cache,
                 today=today,
                 repair_fn=lambda body, problems, allow="": drafting.repair_and_verify(
-                    body, problems, profile, today, allow=allow),
+                    body, problems, profile, today, allow=f"{allow} {izin.get(allow, '')}"),
                 update_fn=lambda i, to, subj, body: update_draft(i, to, subj, body, token),
                 delete_fn=lambda i: delete_draft(i, token),
                 key_fn=lambda body: audit_drafts.verdict_hash(body, profile, rules),
@@ -1492,6 +1504,44 @@ def main() -> int:
     dur = threading.Event()
     yer = [0]                # ayrılan taslak yeri: paralel işçiler hedefi aşmasın
 
+    # Yazılacak adresi olmayan şirketin sitesinde ilan panosu varsa ve panoda role uyan ilan
+    # açıksa şirket elenmez, ilanı "sen başvur" listesine girer. Yalnızca kategoriye oturan
+    # roller alınır: panonun tamamı okunduğu için "açıkça elenmedi" yetmez.
+    ats_aday: list = []
+    defter = state.get(board.LEDGER_KEY, {})
+    yeni_ilan = [0]
+
+    def rol_uygun(title: str) -> bool:
+        ok, why, _ = pipeline.role_filter(title, profile)
+        return ok and why.startswith("uygun rol")
+
+    def ats_yonlendir(name: str, c: dict, site_text: str, panolar: list) -> str:
+        """Adayın panosundaki uygun ilanları listeye ekler; eklediyse sebep metnini döndürür."""
+        if not panolar or budget_left() < 300:
+            return ""
+        ilanlar = report.board_candidates(
+            name, panolar[0], lambda u: _get(u, timeout=8, limit=2_000_000), rol_uygun)
+        if not ilanlar:
+            return ""
+        # Defterde bekleyen şirket yeniden elemeye sokulmaz; ilanı tazelenir, tavandan düşmez.
+        bilinen = any(board.ledger_key(a) in defter for a in ilanlar)
+        if not bilinen:
+            if yeni_ilan[0] >= ATS_ADAY_LIMIT:
+                return ""
+            j = drafting.judge(c, site_text)
+            if not (j and j.get("uygun")
+                    and pipeline.sector_filter(name, str(j.get("sektor", "")), state)[0]):
+                return ""
+        with lock:
+            if not bilinen:
+                ilanlar = ilanlar[:max(0, ATS_ADAY_LIMIT - yeni_ilan[0])]
+                yeni_ilan[0] += len(ilanlar)
+            ats_aday.extend(ilanlar)
+        if not ilanlar:
+            return ""
+        return ("adres yok, ilanı başvuru listesinde bekliyor" if bilinen else
+                f"adres yok, {len(ilanlar)} ilan başvuru listesine eklendi ({panolar[0][0]})")
+
     def isle(d: str, c: dict) -> None:
         if dur.is_set():
             return
@@ -1516,10 +1566,12 @@ def main() -> int:
             return
         site_text = drafting.page_text(raw.decode("utf-8", errors="replace"))
 
-        email, kanit = find_verified_email(d)
+        panolar: list = []
+        email, kanit = find_verified_email(d, panolar)
         if not email:
+            neden = ats_yonlendir(name, c, site_text, panolar) or kanit
             with lock:
-                skipped.append((d, kanit))
+                skipped.append((d, neden))
             return
         if dur.is_set():                       # LLM'e girmeden son kontrol
             return
@@ -1559,7 +1611,8 @@ def main() -> int:
                             "skor": verdict.get("uygunluk_skoru") or decision.get("skor"),
                             "skor_gerekce": verdict.get("skor_gerekce", ""),
                             "hedef_kisiler": hedef[:3],
-                            "linkedin_mesaji": verdict.get("linkedin_mesaji", "")})
+                            "linkedin_mesaji": verdict.get("linkedin_mesaji", ""),
+                            "sayi_izni": verdict.get("sayi_izni", "")})
             n = len(drafted)
         cv = verdict.get("cv") if "\nCV: " in verdict.get("govde", "") else "yok"
         print(f"  + {d} → {email} ({'taslak ' + str(draft_id) if draft_id else 'DRY_RUN'}) "
@@ -1600,6 +1653,8 @@ def main() -> int:
             print(f"   elenen {adet:>4}: {grup}")
         for d, why in [s for s in skipped if re.search(r"eleme:|HALÜSİNASYON|pipeline:", s[1])][:20]:
             print(f"     x {d}: {why[:140]}")
+        for a in ats_aday:
+            print(f"   ilan {a['firma']}: {a['title']} → {a['link']}")
         print(f"Bitti: {len(drafted)}/{TARGET} aday, {len(skipped)} elendi.")
         return 0
 
@@ -1607,7 +1662,8 @@ def main() -> int:
     for x in drafted:
         state.setdefault("companies_already_contacted", {})[x["firma"]] = {
             "date": today, "channel": "gmail_draft_speculative", "email": x["email"],
-            "draft_id": x["draft_id"], "last_reply_seen": None}
+            "draft_id": x["draft_id"], "last_reply_seen": None,
+            **({"sayi_izni": x["sayi_izni"]} if x.get("sayi_izni") else {})}
     state["last_run_date"] = today
     state["total_drafts_created_lifetime"] = state.get("total_drafts_created_lifetime", 0) + len(drafted)
     state["daily_caps_note"] = (f"{today} hibrit run: {len(cands)} aday domain, "
@@ -1623,12 +1679,19 @@ def main() -> int:
 
     # --- ikincil: ATS/portal digest (SEN başvuracaksın; taslak değil)
     ats_digest = report.gather_ats_digest(search, lambda t: pipeline.role_filter(t, profile)[0], log)
+    # Adresi olmayan adayların kendi panolarından gelen ilanlar (ats_yonlendir)
+    var = {board.ledger_key(a) for a in ats_digest}
+    ats_digest += [a for a in ats_aday if board.ledger_key(a) not in var]
+    log.append(f"  Aday panoları: {len(ats_aday)} ilan ({yeni_ilan[0]} yeni)")
 
     # --- takip panosu: ilan defteri (başvurulan ilan listeden düşer) + firma durumları
     # Pano arızası raporu düşürmesin: state yukarıda yazıldı, rapor hatayı gösterir.
     try:
         board.update_ledger(state, ats_digest, today)
-        ats_digest = [a for a in ats_digest if not a.get("basvuruldu")]
+        # Aday panosundan gelen ilan rapora yalnızca ilk görüldüğü gün girer; açık kaldığı
+        # sürece takip.md'de durur. Her gün aynı listeyi tekrar etmek raporu okunmaz yapar.
+        ats_digest = [a for a in ats_digest if not a.get("basvuruldu")
+                      and (a.get("yeni") or not a.get("aday"))]
         if live_ids is not None:
             live_ids |= {x["draft_id"] for x in drafted if x.get("draft_id")}
         pano = board.build_board(state, int(time.time() * 1000), sent_events, live_ids,
@@ -1960,6 +2023,10 @@ def _self_test() -> int:
         assert find_verified_email("acme.io")[0] == "hello@acme.io"
         site_["/privacy"] = b"<p>Chief Privacy Officer: zed@acme.io</p>"
         assert find_verified_email("acme.io")[0] is None
+        # adres çıkmayan sitede ilan panosu görülürse çağırana bildirilir
+        site_["/careers"] = b'<a href="https://jobs.ashbyhq.com/acme/1">Open roles</a>'
+        pano_: list = []
+        assert find_verified_email("acme.io", pano_)[0] is None and pano_ == [("ashby", "acme")]
     finally:
         _get = gercek_get
         globals()["mx_ok"] = gercek_mx
