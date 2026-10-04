@@ -1567,7 +1567,7 @@ def main() -> int:
                 f"adres yok, {len(ilanlar)} ilan başvuru listesine eklendi ({panolar[0][0]})")
 
     def isle(d: str, c: dict) -> None:
-        if dur.is_set():
+        if dur.is_set() or drafting.KREDI_BITTI:   # kredi bitince site çekip arama harcamanın anlamı yok
             return
         name = d.split(".")[0]
         if not country_allowed(d):
@@ -1686,6 +1686,13 @@ def main() -> int:
             print(f"   ilan {a['firma']}: {a['title']} → {a['link']}")
         print(f"Bitti: {len(drafted)}/{TARGET} aday, {len(skipped)} elendi.")
         return 0
+
+    if drafting.KREDI_BITTI:
+        banner_lines = list(banner_lines) + [
+            "🔴 Anthropic API kredisi bitti: eleme, taslak ve denetim bu run'da durdu. "
+            "console.anthropic.com > Plans & Billing üzerinden kredi yükle. İşlenemeyen adaylar "
+            "kayda yazılmadı, kredi gelince yeniden denenir."]
+        print(banner_lines[-1])
 
     # --- state + log güncelle
     for x in drafted:

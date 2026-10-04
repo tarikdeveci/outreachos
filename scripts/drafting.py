@@ -35,13 +35,15 @@ from numeric import foreign_numbers, numeric_check, strip_urls  # noqa: F401  (d
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "claude-haiku-4-5")
 DRAFT_MODEL = os.environ.get("DRAFT_MODEL", "claude-sonnet-5")
 VERIFY_MODEL = os.environ.get("VERIFY_MODEL", "claude-sonnet-5")
+KREDI_BITTI = False          # Anthropic "credit balance is too low" döndü; run boyunca çağrı yapılmaz
 
 
 def _call(model: str, system: str, user: str, key: str, max_tokens: int = 1500,
           temperature: float | None = None) -> dict | None:
     """Modelin JSON cevabı; `key` cevapta olması gereken anahtardır (bkz. last_object)."""
+    global KREDI_BITTI
     key = os.environ.get("ANTHROPIC_API_KEY")
-    if not key:
+    if not key or KREDI_BITTI:
         return None
     istek = {"model": model, "max_tokens": max_tokens, "system": system,
              "messages": [{"role": "user", "content": user}]}
@@ -57,7 +59,11 @@ def _call(model: str, system: str, user: str, key: str, max_tokens: int = 1500,
     except HTTPError as e:
         # Gövdeyi bas: yalın "400 Bad Request" emekli model ID'sini gizliyordu ve
         # hata sessizce "içerik doğrulanamadı" verdict'ine dönüşüyordu.
-        print(f"    ! {model} hatası: HTTP {e.code} — {e.read().decode(errors='replace')[:200]}")
+        govde = e.read().decode(errors="replace")
+        # Kredi bitince her çağrı aynı 400'ü alıyordu (bir run'da 641 kez); ilk hatada kesilir,
+        # kalan adımlar çağrı yapmadan None döner, run raporu bunu açıkça yazar.
+        KREDI_BITTI = "credit balance" in govde.lower()
+        print(f"    ! {model} hatası: HTTP {e.code}: {govde[:200]}")
         return None
     except (URLError, TimeoutError, OSError) as e:
         print(f"    ! {model} bağlantı hatası: {e}")
@@ -390,6 +396,20 @@ if __name__ == "__main__":
 
     prof = {"projeler": ["Acme Panel"], "metrik": "ortalama 0.56"}
     assert rules_version() == rules_version() and len(rules_version()) == 8
+
+    # kredi bitince ilk 400'de kesilir, sonraki çağrı ağa çıkmaz (ağsız: urlopen sahte)
+    import io
+    cagri = []
+
+    def _sahte(req, timeout=0):
+        cagri.append(1)
+        raise HTTPError("u", 400, "x", {}, io.BytesIO(b'{"message": "Your credit balance is too low"}'))
+    eski_key, eski_open = os.environ.get("ANTHROPIC_API_KEY"), urlopen
+    os.environ["ANTHROPIC_API_KEY"], urlopen = "test", _sahte
+    assert judge({"domain": "a.io"}, "") is None and judge({"domain": "b.io"}, "") is None
+    assert KREDI_BITTI and len(cagri) == 1
+    KREDI_BITTI, urlopen = False, eski_open
+    os.environ.pop("ANTHROPIC_API_KEY") if eski_key is None else os.environ.update(ANTHROPIC_API_KEY=eski_key)
 
     temiz, kirli = {"temiz": True, "sorunlar": []}, {"temiz": False, "sorunlar": ["uydurma"]}
     govde = "Merhaba, Acme Panel projesini kurdum. Fizyoterapi platformu geliştirdim. Selamlar."
