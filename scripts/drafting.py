@@ -432,7 +432,6 @@ if __name__ == "__main__":
              '<!-- <div>eski</div> --><svg><path d="M0 0"/></svg><h1>We build &#x27;Acme&#x27;</h1></body></html>')
     assert page_text(sayfa) == "AI tools for hotels & hostels. Acme We build 'Acme'", page_text(sayfa)
     assert page_text("<p>" + "a" * 50 + "</p>", limit=10) == "a" * 10
-
     # nesneden sonra yazmaya devam eden cevap: son tam nesne geçerlidir
     assert last_object('{"uygun": false}\nYeniden bakınca:\n{"uygun": true}') == {"uygun": True}
     assert last_object('ön söz {"uygun": true}\nNot: {yarım') == {"uygun": True}
@@ -456,7 +455,6 @@ if __name__ == "__main__":
         assert numeric_check(metin, prof, site) is not None, metin
     assert foreign_numbers("12 ülkede 100,000 kullanıcı, skor 0.56", prof, "acme.io") == ["12", "100,000"]
     assert numeric_check("12 ülkede 100,000 kullanıcı", prof, "acme.io 12 100,000") is None
-
     assert rules_version() == rules_version() and len(rules_version()) == 8
 
     temiz, kirli = {"temiz": True, "sorunlar": []}, {"temiz": False, "sorunlar": ["uydurma"]}

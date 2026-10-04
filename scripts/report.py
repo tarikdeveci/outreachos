@@ -16,7 +16,7 @@ import json
 import re
 from email.message import EmailMessage
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request, urlopen
 
 # ATS board rotasyonu — junior/uygun ilanlar. discover.py'nin search()'ü ile aranır.
@@ -197,9 +197,12 @@ def board_postings(tur: str, ad: str, get_fn) -> list[dict]:
     return out
 
 
-def board_candidates(firma: str, pano: tuple, get_fn, role_ok, limit: int = 2) -> list[dict]:
+def board_candidates(pano: tuple, get_fn, role_ok, limit: int = 2) -> list[dict]:
     """Panodaki role uyan ilanlar, digest kaydı biçiminde. Şirket başına en fazla `limit`
-    ilan; giriş seviyesi olanlar önce, aynı başlığın farklı şehirleri tek kayıt."""
+    ilan; giriş seviyesi olanlar önce, aynı başlığın farklı şehirleri tek kayıt. Firma adı
+    pano adından gelir (arama özetindeki gibi): başvuru onay maili şirketi o adla anar,
+    ilan defteri de ilanı o adla kapatır."""
+    firma = unquote(pano[1]).replace("-", " ").title()
     gorulen: set = set()
     uygun = [x for x in board_postings(pano[0], pano[1], get_fn)
              if role_ok(x["title"]) and not (x["title"].lower() in gorulen
@@ -466,10 +469,10 @@ if __name__ == "__main__":
            for i, (t, y) in enumerate([("Software Engineer", "Berlin"), ("Software Engineer", "Paris"),
                                        ("Senior Software Engineer", ""), ("Account Executive", ""),
                                        ("Junior AI Engineer", ""), ("Backend Engineer", "")])]
-    secim = board_candidates("acme", ("lever", "acme"), lambda u: json.dumps(cok).encode(),
+    secim = board_candidates(("lever", "acme-labs"), lambda u: json.dumps(cok).encode(),
                              lambda t: "engineer" in t.lower() and "senior" not in t.lower())
     assert [a["title"] for a in secim] == ["Junior AI Engineer", "Software Engineer (Berlin)"], secim
-    assert all(a["firma"] == "acme" and a["aday"] for a in secim)
+    assert all(a["firma"] == "Acme Labs" and a["aday"] for a in secim)
 
     # skip_breakdown: sebep gruplanır, çoktan aza sıralanır, tanınmayan "diğer"e düşer
     sk = [("a.io", "sayfalarda e-posta bulunamadı"), ("b.io", "sayfalarda e-posta bulunamadı"),

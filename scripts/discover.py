@@ -1520,7 +1520,7 @@ def main() -> int:
         if not panolar or budget_left() < 300:
             return ""
         ilanlar = report.board_candidates(
-            name, panolar[0], lambda u: _get(u, timeout=8, limit=2_000_000), rol_uygun)
+            panolar[0], lambda u: _get(u, timeout=8, limit=2_000_000), rol_uygun)
         if not ilanlar:
             return ""
         # Defterde bekleyen şirket yeniden elemeye sokulmaz; ilanı tazelenir, tavandan düşmez.
