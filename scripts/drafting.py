@@ -73,9 +73,26 @@ def _call(model: str, system: str, user: str, max_tokens: int = 1500,
         # strict=False: model gövdedeki satır sonunu kaçışsız yazınca taslak boşa gidiyordu.
         return json.loads(text[s:e + 1], strict=False)
     except json.JSONDecodeError as err:
-        print(f"    ! {model} JSON ayrıştırılamadı (stop_reason={stop}, {err}): "
-              f"{text[s:s + 160]!r}")
-        return None
+        son = last_object(text, s)
+        if son is None:
+            print(f"    ! {model} JSON ayrıştırılamadı (stop_reason={stop}, {err}): "
+                  f"{text[s:s + 160]!r}")
+        return son
+
+
+def last_object(text: str, i: int = 0) -> dict | None:
+    """Metindeki son tam JSON nesnesi. Model nesneyi kapatıp yazmaya devam edebiliyor (açıklama
+    ya da düzelttiği ikinci nesne); temperature=0 ile aynı aday her gün aynı yerde düşerdi."""
+    dec, son, i = json.JSONDecoder(strict=False), None, text.find("{", i)
+    while i >= 0:
+        try:
+            obj, j = dec.raw_decode(text, i)
+        except json.JSONDecodeError:
+            break
+        if isinstance(obj, dict):
+            son = obj
+        i = text.find("{", j)
+    return son
 
 
 # ---------------------------------------------------------------- sayfa metni
@@ -415,6 +432,11 @@ if __name__ == "__main__":
              '<!-- <div>eski</div> --><svg><path d="M0 0"/></svg><h1>We build &#x27;Acme&#x27;</h1></body></html>')
     assert page_text(sayfa) == "AI tools for hotels & hostels. Acme We build 'Acme'", page_text(sayfa)
     assert page_text("<p>" + "a" * 50 + "</p>", limit=10) == "a" * 10
+
+    # nesneden sonra yazmaya devam eden cevap: son tam nesne geçerlidir
+    assert last_object('{"uygun": false}\nYeniden bakınca:\n{"uygun": true}') == {"uygun": True}
+    assert last_object('ön söz {"uygun": true}\nNot: {yarım') == {"uygun": True}
+    assert last_object('{"uygun": tr') is None and last_object("nesne yok") is None
 
     prof = {"projeler": ["Acme Panel"], "metrik": "ortalama 0.56"}
     assert numeric_check("skor 0.56 oldu", prof) is None
