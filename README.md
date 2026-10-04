@@ -64,11 +64,13 @@ outreachos/
 ├── scripts/                # GÜNLÜK MOTOR (cron bunu çalıştırır)
 │   ├── discover.py         # ana akış: keşif → doğrulama → taslak → guard → rapor
 │   ├── drafting.py         # judge / draft / verify (3 ayrı LLM çağrısı)
+│   ├── numeric.py          # deterministik sayı denetimi (taslaktaki her sayı profilde ya da sitede)
 │   ├── deliverability.py   # bounce ölçümü + eşikler + devre kesici
 │   ├── audit_drafts.py     # bekleyen taslak triyajı
 │   ├── repair.py           # ⚠️ taslakları onarır, onarılamayanı siler (varsayılan KAPALI)
 │   ├── autosend.py         # veto pencereli gönderim (varsayılan KAPALI)
 │   ├── report.py           # günlük rapor + ATS digest
+│   ├── jobboard.py         # adresi olmayan şirketin ilan panosu (Greenhouse, Lever, Ashby, Workable)
 │   ├── tracking.py         # gelen yanıtı okur ve sınıflar (görüşme, ret, otomatik, gürültü)
 │   ├── board.py            # takip panosu: firma durumu, bugünün işleri, ilan defteri
 │   ├── prep.py             # görüşme daveti gelince hazırlık notu (site + profil, uydurma denetimli)
@@ -98,9 +100,11 @@ Motorun saf mantık modülleri ağsız kendi kendini test eder:
 python scripts/deliverability.py
 python scripts/audit_drafts.py
 python scripts/drafting.py
+python scripts/numeric.py
 python scripts/repair.py
 python scripts/autosend.py
 python scripts/report.py
+python scripts/jobboard.py
 python scripts/tracking.py
 python scripts/board.py
 python scripts/prep.py
@@ -237,9 +241,11 @@ Bütün guard modülleri ağsız self-test içerir:
 python scripts/deliverability.py
 python scripts/audit_drafts.py
 python scripts/drafting.py
+python scripts/numeric.py
 python scripts/repair.py
 python scripts/autosend.py
 python scripts/report.py
+python scripts/jobboard.py
 python scripts/tracking.py
 python scripts/board.py
 python scripts/prep.py

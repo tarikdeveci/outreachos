@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 from email.message import EmailMessage
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
+
 
 # ATS board rotasyonu — junior/uygun ilanlar. discover.py'nin search()'ü ile aranır.
 # Startup ATS'leri (firma adı URL path'inden çıkar) + KURUMSAL kaynaklar (LinkedIn Jobs,
@@ -128,89 +128,6 @@ def gather_ats_digest(search_fn, role_ok, log, limit: int = 12) -> list[dict]:
                 return out
     log.append(f"  ATS digest: {len(out)} uygun ilan")
     return out
-
-
-# --- Şirketin kendi ATS panosu. Yazılacak adresi olmayan aday eskiden sessizce eleniyordu;
-# oysa sitesinde ilan panosu varsa başvuru yolu açıktır. Pano bağlantısı sitede aranır,
-# açık ilanlar panonun herkese açık ilan API'sinden okunur.
-PANO_RE = re.compile(
-    r"(?:job-boards|boards)(?:\.eu)?\.greenhouse\.io/"
-    r"(?:embed/job_(?:board|app)(?:/js)?\?for=)?(?P<greenhouse>[\w-]+)"
-    r"|jobs\.eu\.lever\.co/(?P<lever_eu>[\w-]+)"
-    r"|jobs\.lever\.co/(?P<lever>[\w-]+)"
-    r"|jobs\.ashbyhq\.com/(?P<ashby>[\w.%-]+)"
-    r"|apply\.workable\.com/(?P<workable>[\w-]+)", re.I)
-PANO_API = {"greenhouse": "https://boards-api.greenhouse.io/v1/boards/{}/jobs",
-            "lever": "https://api.lever.co/v0/postings/{}?mode=json",
-            "lever_eu": "https://api.eu.lever.co/v0/postings/{}?mode=json",
-            "ashby": "https://api.ashbyhq.com/posting-api/job-board/{}",
-            "workable": "https://apply.workable.com/api/v1/widget/accounts/{}"}
-GIRIS_SEVIYESI = ("junior", "jr.", "jr ", "intern", "staj", "associate", "entry", "new grad",
-                  "yeni mezun", "graduate", "trainee")
-
-
-def find_board(html: str) -> tuple | None:
-    """Sayfada şirketin ATS panosuna giden bağlantı varsa (tür, pano adı)."""
-    for m in PANO_RE.finditer(html or ""):
-        tur = m.lastgroup
-        ad = m.group(tur)
-        if ad.lower() not in GENERIC_ATS_SEGMENTS | {"j", "api", "embed"}:
-            return tur, ad
-    return None
-
-
-def board_postings(tur: str, ad: str, get_fn) -> list[dict]:
-    """Panonun açık ilanları: [{title, link, yer}]. get_fn(url) → bytes | None."""
-    raw = get_fn(PANO_API[tur].format(ad))
-    if not raw:
-        return []
-    text = raw.decode("utf-8", errors="replace")
-    try:
-        data = json.loads(text)
-        rows = data if isinstance(data, list) else (data.get("jobs") if isinstance(data, dict) else [])
-    except json.JSONDecodeError:
-        # İlan metinlerini de taşıyan cevap boyut tavanında kesilir: okunabilen ilanlar alınır.
-        rows, dec = [], json.JSONDecoder()
-        i = 0 if text.lstrip().startswith("[") else text.find('"jobs"')
-        while i >= 0:
-            i = text.find("{", i)
-            if i < 0:
-                break
-            try:
-                r, i = dec.raw_decode(text, i)
-            except json.JSONDecodeError:
-                break
-            rows.append(r)
-    out = []
-    for r in rows or []:
-        if not isinstance(r, dict) or r.get("isListed") is False:
-            continue
-        kat = r.get("categories") if isinstance(r.get("categories"), dict) else {}
-        yer = r.get("location") or kat.get("location") or \
-            " ".join(str(r[k]) for k in ("city", "country") if r.get(k))
-        if isinstance(yer, dict):
-            yer = yer.get("name", "")
-        title = str(r.get("title") or r.get("text") or "").strip()
-        link = str(r.get("absolute_url") or r.get("hostedUrl") or r.get("jobUrl") or r.get("url") or "")
-        if title and link.startswith("http"):
-            out.append({"title": title, "link": link, "yer": str(yer or "").strip()})
-    return out
-
-
-def board_candidates(pano: tuple, get_fn, role_ok, limit: int = 2) -> list[dict]:
-    """Panodaki role uyan ilanlar, digest kaydı biçiminde. Şirket başına en fazla `limit`
-    ilan; giriş seviyesi olanlar önce, aynı başlığın farklı şehirleri tek kayıt. Firma adı
-    pano adından gelir (arama özetindeki gibi): başvuru onay maili şirketi o adla anar,
-    ilan defteri de ilanı o adla kapatır."""
-    firma = unquote(pano[1]).replace("-", " ").title()
-    gorulen: set = set()
-    uygun = [x for x in board_postings(pano[0], pano[1], get_fn)
-             if role_ok(x["title"]) and not (x["title"].lower() in gorulen
-                                             or gorulen.add(x["title"].lower()))]
-    uygun.sort(key=lambda x: not any(j in f" {x['title'].lower()} " for j in GIRIS_SEVIYESI))
-    return [{"firma": firma, "link": x["link"], "aday": True,
-             "title": (f"{x['title']} ({x['yer']})" if x["yer"] else x["title"])[:110]}
-            for x in uygun[:limit]]
 
 
 def linkedin_search_url(company: str, role: str) -> str:
@@ -429,50 +346,6 @@ if __name__ == "__main__":
     dup = [results[0], dict(results[0], link="https://jobs.lever.co/acme/u9")]
     out2 = gather_ats_digest(lambda q: dup if q == ATS_QUERIES[0] else [], lambda t: True, [])
     assert len(out2) == 1, out2
-
-    # find_board: sitedeki pano bağlantısı; jenerik uç nokta ve tekil ilan kısayolu pano değildir
-    assert find_board('<a href="https://jobs.ashbyhq.com/acme/123">Careers</a>') == ("ashby", "acme")
-    assert find_board('src="https://boards.greenhouse.io/embed/job_board/js?for=acme-labs"') \
-        == ("greenhouse", "acme-labs")
-    assert find_board("https://job-boards.greenhouse.io/acme/jobs/1") == ("greenhouse", "acme")
-    assert find_board("https://jobs.eu.lever.co/acme") == ("lever_eu", "acme")
-    assert find_board("https://apply.workable.com/j/AB12 https://apply.workable.com/acme/") \
-        == ("workable", "acme")
-    assert find_board("https://boards.greenhouse.io/embed/job_app <p>no board</p>") is None
-
-    # board_postings: dört panonun cevap biçimi; kesilmiş cevapta okunabilen ilanlar kalır
-    gh = {"jobs": [{"title": "Junior Software Engineer", "absolute_url": "https://x.io/j/1",
-                    "location": {"name": "Berlin"}}], "meta": {"total": 1}}
-    assert board_postings("greenhouse", "acme", lambda u: json.dumps(gh).encode()) == [
-        {"title": "Junior Software Engineer", "link": "https://x.io/j/1", "yer": "Berlin"}]
-    lv = [{"text": "Backend Engineer", "hostedUrl": "https://jobs.lever.co/acme/1",
-           "categories": {"location": "Remote"}, "description": "x" * 50},
-          {"text": "Senior Backend Engineer", "hostedUrl": "https://jobs.lever.co/acme/2"}]
-    kesik = json.dumps(lv).encode()[:-30]                 # ikinci ilan yarıda kesildi
-    assert [p["title"] for p in board_postings("lever", "acme", lambda u: kesik)] == ["Backend Engineer"]
-    ab = {"apiVersion": "1", "jobs": [
-        {"title": "Product Engineer", "jobUrl": "https://jobs.ashbyhq.com/acme/1", "location": "London",
-         "isListed": True},
-        {"title": "Gizli", "jobUrl": "https://jobs.ashbyhq.com/acme/2", "isListed": False}]}
-    assert [p["title"] for p in board_postings("ashby", "acme", lambda u: json.dumps(ab).encode())] \
-        == ["Product Engineer"]
-    assert [p["title"] for p in board_postings("ashby", "acme", lambda u: json.dumps(ab).encode()[:-60])] \
-        == ["Product Engineer"]
-    wk = {"name": "Acme [TR]", "jobs": [{"title": "AI Engineer", "url": "https://apply.workable.com/j/1",
-                                        "city": "Izmir", "country": "Turkey"}]}
-    assert board_postings("workable", "acme", lambda u: json.dumps(wk).encode())[0]["yer"] == "Izmir Turkey"
-    assert board_postings("lever", "acme", lambda u: None) == []
-    assert board_postings("lever", "acme", lambda u: b"<html>404</html>") == []
-
-    # board_candidates: rol filtresi, giriş seviyesi önce, aynı başlık tek kayıt, şirket başına 2
-    cok = [{"text": t, "hostedUrl": f"https://jobs.lever.co/acme/{i}", "categories": {"location": y}}
-           for i, (t, y) in enumerate([("Software Engineer", "Berlin"), ("Software Engineer", "Paris"),
-                                       ("Senior Software Engineer", ""), ("Account Executive", ""),
-                                       ("Junior AI Engineer", ""), ("Backend Engineer", "")])]
-    secim = board_candidates(("lever", "acme-labs"), lambda u: json.dumps(cok).encode(),
-                             lambda t: "engineer" in t.lower() and "senior" not in t.lower())
-    assert [a["title"] for a in secim] == ["Junior AI Engineer", "Software Engineer (Berlin)"], secim
-    assert all(a["firma"] == "Acme Labs" and a["aday"] for a in secim)
 
     # skip_breakdown: sebep gruplanır, çoktan aza sıralanır, tanınmayan "diğer"e düşer
     sk = [("a.io", "sayfalarda e-posta bulunamadı"), ("b.io", "sayfalarda e-posta bulunamadı"),

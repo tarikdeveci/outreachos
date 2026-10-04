@@ -26,6 +26,9 @@ from html import unescape
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import numeric
+from numeric import foreign_numbers, numeric_check, strip_urls  # noqa: F401  (dışarıdan drafting.* diye çağrılıyor)
+
 # Model ID'leri tarih ekisiz yazilir. claude-sonnet-4-5 emekliye ayrildi ve her
 # cagriya HTTP 400 donuyor; guncel karsiligi claude-sonnet-5. Ucuz/pahali
 # kademelendirme korunuyor: eleme Haiku (~20 cagri/gun), taslak+dogrulama Sonnet.
@@ -34,8 +37,9 @@ DRAFT_MODEL = os.environ.get("DRAFT_MODEL", "claude-sonnet-5")
 VERIFY_MODEL = os.environ.get("VERIFY_MODEL", "claude-sonnet-5")
 
 
-def _call(model: str, system: str, user: str, max_tokens: int = 1500,
+def _call(model: str, system: str, user: str, key: str, max_tokens: int = 1500,
           temperature: float | None = None) -> dict | None:
+    """Modelin JSON cevabı; `key` cevapta olması gereken anahtardır (bkz. last_object)."""
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         return None
@@ -73,26 +77,32 @@ def _call(model: str, system: str, user: str, max_tokens: int = 1500,
         # strict=False: model gövdedeki satır sonunu kaçışsız yazınca taslak boşa gidiyordu.
         return json.loads(text[s:e + 1], strict=False)
     except json.JSONDecodeError as err:
-        son = last_object(text, s)
+        son = last_object(text, key, s)
         if son is None:
             print(f"    ! {model} JSON ayrıştırılamadı (stop_reason={stop}, {err}): "
                   f"{text[s:s + 160]!r}")
         return son
 
 
-def last_object(text: str, i: int = 0) -> dict | None:
-    """Metindeki son tam JSON nesnesi. Model nesneyi kapatıp yazmaya devam edebiliyor (açıklama
-    ya da düzelttiği ikinci nesne); temperature=0 ile aynı aday her gün aynı yerde düşerdi."""
-    dec, son, i = json.JSONDecoder(strict=False), None, text.find("{", i)
+def last_object(text: str, key: str, i: int = 0) -> dict | None:
+    """Metindeki, `key` anahtarını taşıyan son tam JSON nesnesi. Model nesneyi kapatıp yazmaya
+    devam edebiliyor (açıklama ya da düzelttiği ikinci nesne); temperature=0 ile aynı aday her
+    gün aynı yerde düşerdi. Anahtar şartı açıklamadaki parça nesneyi ({"sektor": ...}) ve kesik
+    dış nesnenin içindekini dışarıda bırakır. Denetimde (`temiz`) kirli hüküm her zaman kazanır:
+    "şu cümle çıkarılırsa temiz olur" diye yazılan ikinci nesne sorunu gizlemesin."""
+    dec, son, kirli, i = json.JSONDecoder(strict=False), None, None, text.find("{", i)
     while i >= 0:
         try:
             obj, j = dec.raw_decode(text, i)
         except json.JSONDecodeError:
-            break
-        if isinstance(obj, dict):
+            i = text.find("{", i + 1)
+            continue
+        if isinstance(obj, dict) and key in obj:
             son = obj
-        i = text.find("{", j)
-    return son
+            if key == "temiz" and obj["temiz"] is False:
+                kirli = obj
+        i = text.find("{", j) if isinstance(obj, dict) and key in obj else text.find("{", i + 1)
+    return kirli or son
 
 
 # ---------------------------------------------------------------- sayfa metni
@@ -143,7 +153,7 @@ def judge(company: dict, site_text: str) -> dict | None:
     # temperature 0: sınırdaki şirket bir run'da geçip ertesi gün elenmesin.
     return _call(JUDGE_MODEL, JUDGE_SYSTEM,
                  f"ŞİRKET: {company['domain']}\nSite metni:\n{site_text[:3000]}",
-                 max_tokens=400, temperature=0)
+                 "uygun", max_tokens=400, temperature=0)
 
 
 # ---------------------------------------------------------------- 2) yazma
@@ -196,7 +206,7 @@ def draft(company: dict, site_text: str, profile: dict, sektor: str,
                  "yazmaktansa çıkar.")
     # 1500 → 4000: aynı model, aynı kesilme riski (bkz. verify). Taslak JSON'u mail
     # gövdesi + skor + hedef roller + LinkedIn notu taşıyor, yani verify'dan uzun.
-    return _call(DRAFT_MODEL, DRAFT_SYSTEM, user, max_tokens=4000)
+    return _call(DRAFT_MODEL, DRAFT_SYSTEM, user, "govde", max_tokens=4000)
 
 
 def attach_cv(d: dict, profile: dict) -> None:
@@ -243,73 +253,7 @@ def verify(body: str, profile: dict) -> dict | None:
     return _call(VERIFY_MODEL, VERIFY_SYSTEM,
                  f"--- PROFİL ---\n{json.dumps(profile, ensure_ascii=False)}\n\n"
                  f"--- MAİL METNİ ---\n{strip_urls(body)}",
-                 max_tokens=3000)
-
-
-# ---------------------------------------------------------------- sayı denetimi
-NUM_RE = re.compile(r"\d[\d.,]*\s*(?:%|k\+|m\+|bin|milyon)?", re.I)
-NUM_WHITELIST = {"1", "2", "3", "4", "5", "2022", "2023", "2024", "2025", "2026"}
-URL_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
-
-
-def strip_urls(body: str) -> str:
-    """Gövdedeki URL'leri denetim dışına çıkarır.
-
-    URL bir İDDİA değildir; içindeki rakamlar da öyle. Gmail, taslak API üzerinden
-    yazılan linkleri `google.com/url?q=...&ust=1790242035715000&sa=E` biçimine sarıyor
-    ve o 16 haneli zaman damgası hem numeric_check'e "profilde olmayan sayı" diye
-    takılıyor hem de doğrulayan modele uydurma metrik gibi görünebiliyordu. Denetim
-    metni değil iddiaları okumalı."""
-    return URL_RE.sub(" ", body or "")
-
-
-def binlik(s: str) -> str:
-    """Binlik ayracını atar: sitede '20,000', Türkçe metinde '20.000' aynı sayıdır."""
-    return re.sub(r"(?<=\d)[.,](?=\d{3}\b)", "", s or "")
-
-
-def foreign_numbers(body: str, profile: dict, allow: str = "") -> list:
-    """Gövdede geçip ne profilde ne de `allow` metninde bulunan sayılar (yazıldığı haliyle)."""
-    prof_text = json.dumps(profile, ensure_ascii=False).lower()
-    # Sayı bütün olarak eşleşmeli: sitedeki '100,000' gövdedeki '100'e, '4.9' da '9'a izin vermez.
-    allow_nums = set()
-    for t in re.findall(r"\d[\d.,]*", allow or ""):
-        allow_nums |= {t.rstrip(".,"), binlik(t.rstrip(".,"))}
-    out = []
-    for raw in NUM_RE.findall(strip_urls(body)):
-        tok = raw.strip().rstrip(".,").lower().replace(" ", "")
-        if not tok or tok in NUM_WHITELIST:
-            continue
-        digits = tok.rstrip("%k+mbinmilyon").rstrip(".,")
-        duz = binlik(digits)
-        if not digits or digits in NUM_WHITELIST or digits in allow_nums or duz in allow_nums:
-            continue
-        # Sınır kontrolü rakam ve noktaya bakar, VİRGÜLE bakmaz.
-        #   - rakam komşusu engellenmeli: '500' aranırken 'ISO 50001' eşleşmemeli
-        #   - nokta komşusu engellenmeli: '56' aranırken '0.56' eşleşmemeli
-        #   - virgül engellenMEmeli: profilde 'ISO 14064, GHG' yazıyorken '14064'
-        #     aranınca virgül yüzünden eşleşme reddediliyordu (yanlış alarm)
-        if not any(re.search(rf"(?<![\d.]){re.escape(x)}(?![\d.])", prof_text)
-                   for x in {digits, duz}):
-            out.append(raw.strip())
-    return out
-
-
-def numeric_check(body: str, profile: dict, allow: str = "") -> str | None:
-    """Profilde geçmeyen bir sayı varsa sebebini döndürür.
-
-    LLM doğrulamasının yanında deterministik bir ikinci kat: model bazen
-    metriği gözden kaçırıyor, bu kontrol kaçırmıyor. '150K+ aylık etkin
-    kullanıcı' uydurmasını yakalayan buydu.
-
-    allow: içindeki sayılar iddia sayılmayan metin. Firmanın adı ya da domaini
-    ('83sciences.ai' firmasına yazılan her taslak '83' yüzünden uydurma sayılıp eleniyordu)
-    ve şirketin kendi sitesinin metni: model siteyi okuyup 'sitenizdeki 100,000 kullanıcı'
-    yazınca şirketin kendi sayısı uydurma sayılıyordu. Binlik ayracı farkı ('20,000' ve
-    '20.000') eşleşmeyi bozmaz.
-    """
-    yabanci = foreign_numbers(body, profile, allow)
-    return f"profilde olmayan sayı: '{yabanci[0]}'" if yabanci else None
+                 "temiz", max_tokens=3000)
 
 
 def rules_version() -> str:
@@ -317,9 +261,10 @@ def rules_version() -> str:
 
     Elle artırılan bir sürüm numarası unutulur; kuralın kendisinden türetilen hash
     unutulamaz. Doğrulama prompt'u, sayı kalıbı, URL kalıbı ya da beyaz liste
-    değiştiği anda eski kararlar kendiliğinden geçersiz olur."""
-    blob = "|".join([VERIFY_SYSTEM, NUM_RE.pattern, URL_RE.pattern,
-                     ",".join(sorted(NUM_WHITELIST))])
+    değiştiği anda eski kararlar kendiliğinden geçersiz olur. Sayı denetiminin tamamı
+    (`numeric.py`) hash'e girer: eşleme mantığı değişince de eski karar kalmaz."""
+    with open(numeric.__file__, encoding="utf-8") as f:
+        blob = VERIFY_SYSTEM + "|" + f.read()
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:8]
 
 
@@ -345,7 +290,7 @@ def repair(body: str, problems: list, profile: dict, today: str) -> dict | None:
             f"--- DENETİMİN BULDUĞU SORUNLAR ---\n"
             + "\n".join(f"- {p}" for p in problems)
             + f"\n\n--- MAİL METNİ ---\n{body}")
-    return _call(DRAFT_MODEL, REPAIR_SYSTEM, user, max_tokens=4000)
+    return _call(DRAFT_MODEL, REPAIR_SYSTEM, user, "govde", max_tokens=4000)
 
 
 def repair_and_verify(body: str, problems: list, profile: dict, today: str,
@@ -432,29 +377,18 @@ if __name__ == "__main__":
              '<!-- <div>eski</div> --><svg><path d="M0 0"/></svg><h1>We build &#x27;Acme&#x27;</h1></body></html>')
     assert page_text(sayfa) == "AI tools for hotels & hostels. Acme We build 'Acme'", page_text(sayfa)
     assert page_text("<p>" + "a" * 50 + "</p>", limit=10) == "a" * 10
-    # nesneden sonra yazmaya devam eden cevap: son tam nesne geçerlidir
-    assert last_object('{"uygun": false}\nYeniden bakınca:\n{"uygun": true}') == {"uygun": True}
-    assert last_object('ön söz {"uygun": true}\nNot: {yarım') == {"uygun": True}
-    assert last_object('{"uygun": tr') is None and last_object("nesne yok") is None
+    # nesneden sonra yazmaya devam eden cevap: beklenen anahtarı taşıyan son tam nesne geçerlidir
+    assert last_object('{"uygun": false}\nYeniden bakınca:\n{"uygun": true}', "uygun") == {"uygun": True}
+    assert last_object('ön söz {"uygun": true}\nNot: {yarım', "uygun") == {"uygun": True}
+    assert last_object('{"uygun": tr', "uygun") is None and last_object("nesne yok", "uygun") is None
+    assert last_object('{"uygun": true, "sektor": "f"}\nNot: {"sektor": "f"} seçtim.', "uygun")["uygun"]
+    assert last_object('Şablon {x} yerine: {"uygun": true} bitti {', "uygun") == {"uygun": True}
+    assert last_object('{"uygun": true, "x": {"uygun": false', "uygun") is None    # kesik dış nesne
+    # denetimde kirli bir hüküm varsa, sonradan yazılan temiz nesne onu silmez
+    assert last_object('{"temiz": false, "sorunlar": ["a"]}\nÇıkarılırsa {"temiz": true, "sorunlar": []}',
+                       "temiz") == {"temiz": False, "sorunlar": ["a"]}
 
     prof = {"projeler": ["Acme Panel"], "metrik": "ortalama 0.56"}
-    assert numeric_check("skor 0.56 oldu", prof) is None
-    assert numeric_check("150K+ kullanıcı", prof) is not None
-    # Firma adındaki rakam iddia değildir; aynı rakam başka firmada hâlâ yakalanır
-    assert numeric_check("83 Sciences ekibine yazıyorum", prof) is not None
-    assert numeric_check("83 Sciences ekibine yazıyorum", prof, "83sciences.ai") is None
-    assert numeric_check("Company42 için 97 müşteri", prof, "company42.com") is not None
-    # URL içindeki sayı iddia değildir
-    assert numeric_check("bkz https://x.io/url?ust=1790242035715000&sa=E", prof) is None
-    # Şirketin sitesinde yazan sayı serbesttir (binlik ayracı ve ek farkıyla); yazmayan değil
-    site = "acme.io Trusted by 100,000 users in 12 countries. 700K+ downloads, rated 4.9"
-    for metin in ("100.000 kullanıcınız", "100,000 users", "12 ülkede", "700k+ indirme", "4.9 puan"):
-        assert numeric_check(metin, prof, site) is None, metin
-    assert numeric_check("150K+ kullanıcı, 12 ülke", prof, site) == "profilde olmayan sayı: '150K+'"
-    for metin in ("100 kullanıcı", "9 puan", "70 indirme"):               # parçası izin vermez
-        assert numeric_check(metin, prof, site) is not None, metin
-    assert foreign_numbers("12 ülkede 100,000 kullanıcı, skor 0.56", prof, "acme.io") == ["12", "100,000"]
-    assert numeric_check("12 ülkede 100,000 kullanıcı", prof, "acme.io 12 100,000") is None
     assert rules_version() == rules_version() and len(rules_version()) == 8
 
     temiz, kirli = {"temiz": True, "sorunlar": []}, {"temiz": False, "sorunlar": ["uydurma"]}

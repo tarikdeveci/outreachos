@@ -47,6 +47,7 @@ import deliverability
 import audit_drafts
 import autosend
 import board
+import jobboard
 import prep
 import report
 import tracking
@@ -73,6 +74,7 @@ BUDGET_SEC = int(os.environ.get("BUDGET_SEC", "2400"))       # 40 dk
 WORKERS = int(os.environ.get("WORKERS", "6"))
 # Adresi olmayan adayların ilan panosundan başvuru listesine bir run'da girebilecek yeni ilan.
 ATS_ADAY_LIMIT = int(os.environ.get("ATS_ADAY_LIMIT", "8"))
+PANO_RET_KEY, PANO_RET_GUN = "pano_ret", 14     # elemeden geçmeyen panonun şirketi 14 gün yeniden sorulmaz
 DELIVER_WINDOW_DAYS = int(os.environ.get("DELIVER_WINDOW_DAYS", "30"))
 BOUNCE_WATCH = float(os.environ.get("BOUNCE_WATCH", "0.03"))
 BOUNCE_CRITICAL = float(os.environ.get("BOUNCE_CRITICAL", "0.06"))
@@ -239,7 +241,7 @@ def _get(url: str, headers: dict | None = None, timeout: int = 20,
     try:
         with urlopen(req, timeout=timeout) as r:
             return r.read(limit)            # sayfa başına 400KB tavan
-    except (HTTPError, URLError, TimeoutError, OSError):
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError):   # ValueError: ASCII dışı URL
         return None
 
 
@@ -567,10 +569,11 @@ def find_verified_email(domain: str, panolar: list | None = None) -> tuple[str |
         if not html_bytes:
             return
         html = html_bytes.decode("utf-8", errors="replace")
-        if panolar is not None and not panolar and report.find_board(html):
-            panolar.append(report.find_board(html))
+        if panolar is not None and not panolar and jobboard.find_board(html, domain):
+            panolar.append(jobboard.find_board(html, domain))
         for e in extract_emails(html):
-            if e.split("@")[-1].lower().endswith(domain.lower()):
+            alan = e.split("@")[-1].lower()
+            if alan == domain.lower() or alan.endswith("." + domain.lower()):   # labs.io ≠ acmelabs.io
                 seen.setdefault(e, "" if p in yasal else _address_context(html, e))
 
     # Yazılabilir bir adres çıkana kadar sürer: ilk sayfada yalnızca support@ görüp durmak,
@@ -1509,7 +1512,11 @@ def main() -> int:
     # roller alınır: panonun tamamı okunduğu için "açıkça elenmedi" yetmez.
     ats_aday: list = []
     defter = state.get(board.LEDGER_KEY, {})
-    yeni_ilan = [0]
+    yeni_ilan = [0, 0]       # toplam yeni ilan; içinde konum önceliği 2 olanlar (tavanın yarısı)
+    goren_pano: set = set()  # aynı pano iki adaydan (acme.io, acme.com) iki kez sayılmasın
+    pano_ret = {k: v for k, v in state.get(PANO_RET_KEY, {}).items()
+                if (date.fromisoformat(today) - date.fromisoformat(v)).days < PANO_RET_GUN}
+    state[PANO_RET_KEY] = pano_ret
 
     def rol_uygun(title: str) -> bool:
         ok, why, _ = pipeline.role_filter(title, profile)
@@ -1519,23 +1526,32 @@ def main() -> int:
         """Adayın panosundaki uygun ilanları listeye ekler; eklediyse sebep metnini döndürür."""
         if not panolar or budget_left() < 300:
             return ""
-        ilanlar = report.board_candidates(
+        pano = ":".join(panolar[0]).lower()
+        with lock:
+            if pano in goren_pano or pano in pano_ret:
+                return ""
+            goren_pano.add(pano)
+        ilanlar = jobboard.board_candidates(
             panolar[0], lambda u: _get(u, timeout=8, limit=2_000_000), rol_uygun)
         if not ilanlar:
             return ""
         # Defterde bekleyen şirket yeniden elemeye sokulmaz; ilanı tazelenir, tavandan düşmez.
         bilinen = any(board.ledger_key(a) in defter for a in ilanlar)
         if not bilinen:
-            if yeni_ilan[0] >= ATS_ADAY_LIMIT:
+            if not jobboard.tavana_sigan(ilanlar, *yeni_ilan, ATS_ADAY_LIMIT):
                 return ""
             j = drafting.judge(c, site_text)
             if not (j and j.get("uygun")
                     and pipeline.sector_filter(name, str(j.get("sektor", "")), state)[0]):
+                if j:                                  # model cevap verdiyse karar hatırlanır
+                    with lock:
+                        pano_ret[pano] = today
                 return ""
         with lock:
             if not bilinen:
-                ilanlar = ilanlar[:max(0, ATS_ADAY_LIMIT - yeni_ilan[0])]
+                ilanlar = jobboard.tavana_sigan(ilanlar, *yeni_ilan, ATS_ADAY_LIMIT)
                 yeni_ilan[0] += len(ilanlar)
+                yeni_ilan[1] += sum(jobboard.yer_onceligi(a["yer"]) == 2 for a in ilanlar)
             ats_aday.extend(ilanlar)
         if not ilanlar:
             return ""

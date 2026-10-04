@@ -18,7 +18,7 @@ from collections import Counter
 
 import autosend
 from tracking import (APPS_KEY, ETIKET, GORUSME, GUN_MS, GURULTU, OTOMATIK, RET, YANIT,
-                      _day, _iso_ms, _norm)
+                      _day, _iso_ms, _low)
 
 LEDGER_KEY = "ats_ledger"            # firma|rol → ilan kaydı
 GORUSME_GUN, YANIT_GUN, BEKLEME_GUN = 14, 30, 14
@@ -86,7 +86,28 @@ def resolve_sent(state: dict, sent: dict, live_drafts, count_fn, free_mail=froze
 
 
 def ledger_key(a: dict) -> str:
-    return f"{a['firma']}|{a['title']}".lower()
+    """Firma|rol. Panodan gelen ilanda rol şehirsiz başlıktır (`rol`): pano aynı başlığın
+    şehirlerini başka sırayla verince ilan yeniden "yeni" sayılmasın."""
+    return f"{a['firma']}|{a.get('rol') or a['title']}".lower()
+
+
+# Tek kelimelik bu adlar onay mailinde şirket adı olmadan da geçer ("keep your application
+# open"); onlarda ilanı ad eşleşmesiyle kapatmak yanlış kapatır.
+GENEL_AD = {"open", "remote", "engine", "front", "home", "work", "team", "hiring", "apply",
+            "jobs", "careers", "talent", "people", "labs", "data", "cloud", "app", "hello", "next"}
+
+
+def firma_deseni(firma: str):
+    """Onay mailinde firmayı arayan desen, ya da kapatmaya elverişsizse None. Kelime sınırlı:
+    sıkıştırılmış metinde alt dizgi arayınca 'Juni' 'Junior'da, 'Ramp' 'for Amplitude'da
+    eşleşiyordu. Pano adındaki sondaki sayı ('Open 252') atılır; kelimeler arası boşluk
+    serbesttir ('Lite LLM' ve 'LiteLLM')."""
+    kel = re.findall(r"\w+", _low(firma))
+    while len(kel) > 1 and kel[-1].isdigit():
+        kel.pop()
+    if not kel or len("".join(kel)) < 3 or (len(kel) == 1 and kel[0] in GENEL_AD):
+        return None
+    return re.compile(r"(?<!\w)" + r"\W*".join(map(re.escape, kel)) + r"(?!\w)")
 
 
 def update_ledger(state: dict, digest: list, today: str, keep_days: int = 30) -> int:
@@ -97,6 +118,9 @@ def update_ledger(state: dict, digest: list, today: str, keep_days: int = 30) ->
     new = 0
     for a in digest:
         k = ledger_key(a)
+        eski = f"{a['firma']}|{a['title']}".lower()        # anahtar şehirsiz olmadan önceki kayıt
+        if k not in led and eski in led:
+            led[k] = led.pop(eski)
         if k not in led:
             led[k] = {"firma": a["firma"], "title": a["title"], "ilk": today, "basvuru": None}
             a["yeni"] = True
@@ -104,9 +128,10 @@ def update_ledger(state: dict, digest: list, today: str, keep_days: int = 30) ->
         led[k].update(son=today, link=a["link"])
     now = _iso_ms(today)
     for k, v in list(led.items()):
-        firma = _norm(v.get("firma", ""))
-        if not v.get("basvuru") and len(firma) >= 4:
-            hit = next((x for x in apps if firma in _norm(f"{x.get('kimden')} {x.get('konu')}")), None)
+        desen = None if v.get("basvuru") else firma_deseni(v.get("firma", ""))
+        if desen:
+            hit = next((x for x in apps if desen.search(_low(f"{x.get('kimden')} {x.get('konu')}"))),
+                       None)
             if hit:
                 v["basvuru"] = _day(hit.get("ms"))
         if now - _iso_ms(v.get("son")) > (90 if v.get("basvuru") else keep_days) * GUN_MS:
@@ -261,6 +286,23 @@ if __name__ == "__main__":
     update_ledger(st, [], "2026-10-05")
     assert "omega|product engineer" not in st[LEDGER_KEY]                    # eski ilan düştü
     update_ledger(st, digest[1:], "2026-10-04")
+    # onay maili firmayı kelime olarak anmalı; sondaki pano sayısı atılır, genel ad kapatmaz
+    kapanir = {"Litellm": "Thanks for applying to LiteLLM", "Deel 2": "Deel Hiring Team",
+               "Lite LLM": "LiteLLM Hiring Team", "N26": "Your application to N26"}
+    assert firma_deseni("Open 252") is None and firma_deseni("ab") is None
+    kapanmaz = {"Juni": "Your application for Junior Software Engineer",
+                "Engine": "Application received: Software Engineer",
+                "Front": "Your application for Frontend Developer",
+                "Ramp": "Your application for Amplitude", "Open": "We keep your application open"}
+    for ad, konu in kapanir.items():
+        assert firma_deseni(ad).search(_low(konu)), ad
+    for ad, konu in kapanmaz.items():
+        assert not (firma_deseni(ad) and firma_deseni(ad).search(_low(konu))), ad
+    assert ledger_key({"firma": "A", "title": "SE (Paris)", "rol": "SE"}) == ledger_key(
+        {"firma": "A", "title": "SE (Berlin)", "rol": "SE"}) == "a|se"
+    st2 = {LEDGER_KEY: {"a|se (paris)": {"firma": "A", "title": "SE (Paris)", "son": "2026-10-04"}}}
+    ilan = [{"firma": "A", "title": "SE (Paris)", "rol": "SE", "link": "https://x/3"}]
+    assert update_ledger(st2, ilan, "2026-10-05") == 0 and list(st2[LEDGER_KEY]) == ["a|se"]
 
     # pano
     b = build_board(st, now, events, {"D1"}, free, "2026-10-04")

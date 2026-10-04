@@ -134,15 +134,21 @@ koşula tabidir: şirketin kendi sitesinde yayınlanmış olmalı ve tahmin edil
 başına tek mail kuralı değişmez (mükerrer kapısı domain düzeyindedir). `NAMED_CONTACT=0`
 eski davranışı (yalnızca genel kutu) geri getirir.
 
-**Adres yoksa ilan panosu (`report.find_board`, `board_candidates`).** Yazılabilir adresi
+**Adres yoksa ilan panosu (`jobboard.py`).** Yazılabilir adresi
 çıkmayan adayın okunan sayfalarında Greenhouse, Lever, Ashby ya da Workable panosuna giden
-bağlantı aranır. Varsa açık ilanlar panonun herkese açık ilan API'sinden okunur ve rol
+bağlantı aranır; sayfada birden çok pano varsa adı alan adına benzeyen seçilir. Aynı pano
+bir run'da bir kez işlenir, eleme ya da sektör filtresinden geçmeyen panonun şirketi 14 gün
+yeniden sorulmaz (state: `pano_ret`). Varsa açık ilanlar panonun herkese açık ilan API'sinden okunur ve rol
 filtresinden geçirilir: kıdem ve sert eleme kuralları aynen geçerlidir, ayrıca başlığın
 `role_categories_include` içindeki bir kategoriye oturması gerekir (panonun tamamı okunduğu
 için "açıkça elenmedi" yetmez). Uyan ilanı olan şirket `judge` ve sektör filtresinden de
-geçerse ilanları "sen başvur" listesine girer: şirket başına en fazla 2 ilan (giriş seviyesi
-olanlar önce), run başına en fazla `ATS_ADAY_LIMIT` (8) yeni ilan. Defterde bekleyen şirket
-yeniden elemeye sokulmaz, ilanı tazelenir. İlan rapora yalnızca ilk görüldüğü gün girer,
+geçerse ilanları "sen başvur" listesine girer: şirket başına en fazla 2 ilan, run başına en
+fazla `ATS_ADAY_LIMIT` (8) yeni ilan. Konum filtre değil tercihtir (`jobboard.yer_onceligi`):
+sıralamada önce uzaktan ya da Türkiye ve Avrupa ilanları, sonra konumu belirsiz olanlar,
+en sonda diğerleri (ör. ABD ofisi ya da ABD ile sınırlı uzaktan ilan) gelir; aynı konum
+önceliğinde giriş seviyesi olan öne geçer. En sondaki grup run tavanının en fazla yarısını
+kullanabilir (`jobboard.tavana_sigan`). Defterde bekleyen şirket yeniden elemeye sokulmaz,
+ilanı tazelenir. İlan rapora yalnızca ilk görüldüğü gün girer,
 açık kaldığı sürece `takip.md`'de durur. Ölçüm: öncelik sırasındaki ilk 120 adayın 37'sinde
 adres, 23'ünde pano vardı; 10'unun panosunda role uyan ilan açıktı (16 ilan).
 
@@ -182,11 +188,14 @@ Tek çağrıda "değerlendir + yaz + kendini denetle" demek **çalışmıyor**. 
 | `draft` | Sonnet | Maili yaz (sadece elemeden geçenler için) |
 | `verify` | Sonnet | "Bu metindeki her iddianın profilde karşılığı var mı?" — **bağımsız göz** |
 
-Artı **deterministik sayı denetimi**: metindeki her sayı profilde ya da modelin okuduğu site
-metninde geçiyor mu diye regex ile bakılır. LLM metriği gözden kaçırabiliyor; bu kaçırmıyor.
-Site metni şirketin kendi sayıları içindir ("sitenizdeki 100,000 kullanıcı"): sayı bütün
-olarak eşleşmelidir (`100,000` gövdedeki `100`e izin vermez), binlik ayracı farkı (`20,000`
-ve `20.000`) eşleşmeyi bozmaz. Başvuranın kendi iddialarını profile bağlayan kat `verify`
+Artı **deterministik sayı denetimi** (`numeric.py`): metindeki her sayı profilde ya da
+modelin okuduğu site metninde geçiyor mu diye bakılır. LLM metriği gözden kaçırabiliyor; bu
+kaçırmıyor. Site metni şirketin kendi sayıları içindir ("sitenizdeki 100,000 kullanıcı").
+Karşılaştırma yazıya değil değere bakar: `100,000`, `100.000`, `100 bin` ve `100K` aynı
+sayıdır; `150` ile `150K+`, `4.9` ile `9` farklıdır (eki atıp rakamı karşılaştırmak sitedeki
+"150 employees" ile "150K+ kullanıcı" uydurmasını geçiriyordu). Ayraçlı gövde sayısı
+kaynaktaki yıla eşlenmez (`2.026 kullanıcı` profildeki 2026 ile geçmez); beyaz liste (1 ile 5,
+yıllar) yalnızca eksiz düz sayıya uygulanır. Başvuranın kendi iddialarını profile bağlayan kat `verify`
 olmaya devam eder. Site sayesinde geçen sayılar kayda `sayi_izni` olarak yazılır: bekleyen
 taslak denetimi ve onarım siteyi görmez, bu izin olmadan aynı sayıyı ertesi gün uydurma
 sayardı.
@@ -434,8 +443,10 @@ kayıtlardan türetilir. Elle işaretlenen bir alan yoktur; kullanıcıya soru s
 - **İlan defteri (`ats_ledger`).** ATS özetindeki ve adayların kendi panolarından gelen (§3.3)
   ilanlar günden güne taşınır; ilk kez görülen
   ilan raporda `[YENİ]` etiketi alır. Konu satırında başvuru geçen mailler ayrı bir deftere
-  (`applications_seen`) yazılır; firmanın adı bir başvuru mailinde geçiyorsa ilan kapanır ve
-  listeden düşer. 30 gün görülmeyen ilan defterden silinir.
+  (`applications_seen`) yazılır; firmanın adı bir başvuru mailinde kelime olarak geçiyorsa
+  ilan kapanır ve listeden düşer (`board.firma_deseni`: "Juni" "Junior"da eşleşmez, pano
+  adının sonundaki sayı atılır, "Open" gibi tek kelimelik genel adlar kapatmaz). Panodan
+  gelen ilanın anahtarı şehirsiz başlıktır. 30 gün görülmeyen ilan defterden silinir.
 
 Sınırlar: sınıflama kalıp tabanlıdır; hiçbir kalıba uymayan mail "yanıt" sayılıp kullanıcıya
 gösterilir (kaçırmaktansa fazladan göstermek tercih edildi). Başvuru eşlemesi firma adının
@@ -494,7 +505,9 @@ src/db.py           SQLite şema + durum normalizasyonu + veri kökü seam'i
 src/migrate.py      CSV/JSON → DB (idempotent)
 
 scripts/discover.py       ana akış: keşif → doğrulama → taslak → guard → rapor
-scripts/drafting.py       judge / draft / verify + deterministik sayı denetimi
+scripts/drafting.py       judge / draft / verify / repair (LLM adımları)
+scripts/numeric.py        deterministik sayı denetimi (değer tabanlı eşleme)
+scripts/jobboard.py       şirketin ilan panosu: pano bulma, ilan API'leri, konum tercihi
 scripts/deliverability.py bounce ölçümü + eşikler + devre kesici
 scripts/audit_drafts.py   bekleyen taslak triyajı (mükerrer + içerik)
 scripts/repair.py         otomatik onarım + silme kararları (varsayılan KAPALI)
