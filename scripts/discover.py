@@ -9,8 +9,8 @@ Claude plan limiti tüketilmez.
 
 E-posta doğrulama: adres, şirketin kendi sayfasının HTML'inde birebir geçmeli
 ve domainin MX kaydı olmalı. Bu, uydurulmuş adresi ve ölü domaini eler.
-NOT: şirketin sitesinde yayınladığı ama artık okunmayan bir kutuyu (texinsight,
-vendorside vakaları) eleyemez — orayı ancak bounce geldikten sonra öğreniyoruz,
+NOT: şirketin sitesinde yayınladığı ama artık okunmayan bir kutuyu (gerçek run'larda
+görülen bounce vakaları) eleyemez; orayı ancak bounce geldikten sonra öğreniyoruz,
 o yüzden bounce'lar okunup adres "ölü" işaretleniyor ve bir daha denenmiyor.
 
 Gmail izni `gmail.compose` + `gmail.readonly` + `gmail.send`: taslak yazar, gelen
@@ -101,7 +101,8 @@ GMAIL_PAUSE_SEC = float(os.environ.get("GMAIL_PAUSE_SEC", "0.05"))
 _STARTED = time.monotonic()
 
 
-UA = "Mozilla/5.0 (compatible; outreachos/1.0; +https://github.com/tarikdeveci/outreachos)"
+# Fork eden kendi repo adresini yazsın: sitelerin şikâyeti motorun sahibine değil ona gitsin.
+UA = os.environ.get("OUTREACHOS_UA") or "Mozilla/5.0 (compatible; outreachos/1.0; +https://github.com/tarikdeveci/outreachos)"
 
 # SERPER_API_KEY yokken her aramada aynı uyarıyı basmamak için
 _SERPER_WARNED = False
@@ -1491,13 +1492,20 @@ def main() -> int:
                     for v in state.get("companies_already_contacted", {}).values()
                     if v.get("email_dead")}
 
+    # Anahtar ya da token yoksa gerçek run aday döngüsüne girmez: eskiden token yokken taslak
+    # açılmadan şirket "yazıldı" diye kaydediliyor ve bir daha hiç denenmiyordu.
+    eksik = [ad for ad, var in (("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_API_KEY")),
+                                ("Gmail token", token)) if not var]
+    if eksik and not DRY_RUN:
+        print(f"! {', '.join(eksik)} yok: aday işlenmeden çıkılıyor (SETUP.md 4. bölüm)")
+        return 1
+    if eksik:
+        print(f"! {', '.join(eksik)} yok: kuru denemede eleme ve taslak adımları boş döner")
+
     log: list[str] = []
     log.append("## Taranan Kaynaklar ve Verim\n")
     cands = gather_candidates(todays_queries(), log)
     log.append(f"\n**Toplam aday domain: {len(cands)}**\n")
-
-    if not token and not DRY_RUN:
-        print("! Gmail token yok — taslak oluşturulamayacak, DRY_RUN gibi devam ediliyor")
 
     drafted, skipped = [], []
     # Adaylar birbirinden bağımsız olduğu için paralel işleniyor. Darboğaz
@@ -1615,6 +1623,11 @@ def main() -> int:
         draft_id = None
         if token and not DRY_RUN:
             draft_id = create_draft(email, verdict.get("konu", ""), verdict.get("govde", ""), token)
+            if not draft_id:                   # taslak açılmadıysa şirket "yazıldı" sayılmaz
+                with lock:
+                    yer[0] -= 1
+                    skipped.append((d, "taslak Gmail'de açılamadı, yarın yeniden denenir"))
+                return
         hedef = verdict.get("hedef_kisiler") or []
         if isinstance(hedef, str):
             hedef = [h.strip() for h in re.split(r"[;,]", hedef) if h.strip()]

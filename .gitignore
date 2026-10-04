@@ -18,6 +18,7 @@ candidate_pool.json
 
 # Oturum devir notları: şirket adları ve kişisel run verisi içerir.
 docs/handoff/
+docs/akis-raporu.html
 
 # --- Python ---
 __pycache__/

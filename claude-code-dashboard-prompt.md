@@ -16,7 +16,7 @@ Bu iki dosya mevcut sistemin tek doğruluk kaynağı. Hiçbir geçmiş veriyi si
 ### 1) Veri katmanı
 
 - CSV + JSON'u tek bir SQLite veritabanına (`tracker.db`) migrate et. Tablolar: `companies` (firma, sektor, kanal, proje_eslesme, durum, eposta_veya_link, tarih, draft_id, notlar, son_guncelleme), `profile` (state.json'daki profile objesini olduğu gibi tut — name, title, projects, role_filters, project_sector_mapping), `daily_stats` (tarih, taslak_sayisi, form_sayisi).
-- `durum` alanı enum olsun: `TASLAK`, `ATS_DIGEST`, `ADAY`, `FORM_DOLDURULDU`, `ELENEN_SENIORITY`, `ELENEN_LOKASYON`, `ELENEN_SEKTOR`, `ELENEN_UYGUNSUZ`, `ELENEN_EPOSTA_BULUNAMADI`, `ELENEN_KISISEL`, `ARASTIRILMADI`, `BEKLIYOR` (kişisel/duygusal kararlar için — örn. Patientdesk.ai gibi tanıdık şirketler, "elenen" değil "bekliyor" olarak ayrı bir statü).
+- `durum` alanı enum olsun: `TASLAK`, `ATS_DIGEST`, `ADAY`, `FORM_DOLDURULDU`, `ELENEN_SENIORITY`, `ELENEN_LOKASYON`, `ELENEN_SEKTOR`, `ELENEN_UYGUNSUZ`, `ELENEN_EPOSTA_BULUNAMADI`, `ELENEN_KISISEL`, `ARASTIRILMADI`, `BEKLIYOR` (kişisel/duygusal kararlar için, örn. tanıdığın kurduğu şirketler, "elenen" değil "bekliyor" olarak ayrı bir statü).
 - CSV dosyasını da senkron tut (append-only log olarak kalsın, insan tarafından da okunabilir olması önemli) — DB birincil, CSV yedek/export.
 
 ### 2) Dashboard (web arayüzü)

@@ -50,7 +50,7 @@ def migrate(force=False):
 
     personal_names = set()
     for entry in state.get("excluded_companies_seed_personal", []):
-        # "Patientdesk.ai (kurucu ...)" -> ilk kelime öbeği
+        # "Acme.ai (kurucu ...)" -> ilk kelime öbeği
         base = entry.split("(")[0].strip()
         personal_names.add(norm_name(base))
 

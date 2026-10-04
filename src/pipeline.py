@@ -7,7 +7,7 @@ Manuel outreach akışını koda döker:
   3) classify_contact -> gerçek ATS linki > doğrulanmış genel email; KİŞİYE ÖZEL EMAIL TAHMİN ETMEZ
   4) decide           -> hepsini birleştirir, önerilen durum + gerekçe döndürür
 
-Keşif (discovery) kısmı bir arama API anahtarı gerektirir (SEARCH_API_KEY) — bkz. README.
+Keşif (discovery) kısmı bir arama API anahtarı gerektirir (SERPER_API_KEY), bkz. README.
 Bu modül anahtarsız da çalışır: eldeki bir aday sözlüğünü kurallara göre sınıflandırır.
 
 CLI:

@@ -482,7 +482,7 @@ if __name__ == "__main__":
         cc[ad] = {"email": adres, "channel": "sent_scan", "date": "sent_detected"}
     threads = {"t1": "hi@acme.io", "t2": "ik@beta.dev", "t5": "a@olu.com", "t6": "biri@gmail.com",
                "t10": "help@destek.io", "t11": "ik@elle.io"}
-    assert is_job("AI Engineer / EdTech Product Role") and not is_job("Lenovo Case 2031826834")
+    assert is_job("AI Engineer / EdTech Product Role") and not is_job("Acme Case 1234567890")
     notes = sync(st, fake_get, threads, free, now, "2026-10-04")
     assert [cc[k]["basvuru"] for k in ("destek", "elle", "davet")] == [False, True, True]
     assert [cc[k].get("yanit_turu") for k in ("destek", "elle", "davet")] == [None, YANIT, GORUSME]

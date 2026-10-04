@@ -5,7 +5,7 @@ e-postayı doğrular, kişiselleştirilmiş bir mail **taslağı** yazar, uydurm
 içermediğini denetler ve sana günlük rapor yollar. Bilgisayarın kapalıyken de çalışır
 (GitHub Actions cron). Artı: yerel, tek-kullanıcılı bir **dashboard + karar motoru**.
 
-Sıfır bağımlılık — sadece **Python 3** (stdlib). `npm install` / `pip install` yok.
+Günlük motor sıfır bağımlılık: sadece **Python 3** (stdlib), `npm install` / `pip install` yok. `requirements.txt` ve `Dockerfile` yalnızca isteğe bağlı yerel dashboard içindir.
 
 > 📐 **Mimarinin tamamı ve "kendin nasıl yaparsın" rehberi: [ARCHITECTURE.md](ARCHITECTURE.md)**
 > Tasarım kararları, düşülen çukurlar, bounce guard matematiği, LLM denetim katmanı ve
@@ -26,7 +26,7 @@ Sıfır bağımlılık — sadece **Python 3** (stdlib). `npm install` / `pip in
 > 🚀 **Sıfırdan kendi kurulumunuz için: [SETUP.md](SETUP.md)** (fork, private veri reposu,
 > secret'lar, ilk deneme run'ı, otomasyon anahtarları).
 
-Tek doğruluk kaynağı: `tracker.db` (SQLite). `outreach_log.csv` insan-okunur yedek olarak otomatik senkronlanır.
+Günlük motorun (cron) doğruluk kaynağı veri reposundaki `state.json`'dır. Yerel dashboard kendi `tracker.db` (SQLite) dosyasını kullanır; `outreach_log.csv` onun insan-okunur yedeğidir.
 
 ---
 
@@ -147,7 +147,7 @@ python src/pipeline.py decide '{"firma":"Acme","title":"Junior AI Engineer","lin
 Uyguladığı **değiştirilemez kurallar** (`state.json`'dan okunur):
 - **zero_tolerance_rule** — `Senior/Sr./Lead/Kıdemli/5+ yıl` veya sert-ele (`QA/Test/Destek/Veri girişi`) eşleşirse ilan **hiçbir tabloya girmez**.
 - **Kişiye özel email tahmin edilmez** — sadece doğrulanmış genel email (`info@/hello@/careers@`) veya gerçek ATS linki (Lever/Greenhouse/Ashby/Workable) kabul edilir. Aksi halde `ELENEN_EPOSTA_BULUNAMADI`.
-- `excluded_companies_seed_personal` (tanıdıklar) ve `excluded_sectors` (savunma/siber) pipeline'a **hiç girmez**.
+- `excluded_companies_seed_personal` (tanıdıklar) ve `excluded_sectors` (hariç tutulan sektörler) pipeline'a **hiç girmez**.
 
 ---
 
@@ -159,13 +159,13 @@ Karar motoru anahtarsız çalışır. **Canlı keşif ve otomatik taslak oluştu
 Yeni şirket keşfi (İTÜ Çekirdek / Webrazzi / YC dizini taraması) bir arama API'si ister. Birini seç ve anahtarı ortam değişkenine koy:
 
 ```bash
-export SEARCH_PROVIDER=serper && export SEARCH_API_KEY="..."   # Serper.dev (serper.dev/api-key)
+export SERPER_API_KEY="..."   # Serper.dev (serper.dev/api-key)
 ```
 
 > Google Custom Search JSON API'yi **kullanma**: yeni müşterilere kapalı (her çağrı
 > 403 döner) ve 2027-01-01'de tamamen kapanıyor. Bing Search API de emekliye ayrıldı.
 > Bulut ajanı (günlük cron) Serper kullanıyor; ayrıntı için [SETUP.md](SETUP.md).
-Windows PowerShell: `$env:SEARCH_API_KEY="..."`
+Windows PowerShell: `$env:SERPER_API_KEY="..."`
 
 > Anahtar yoksa keşif atlanır; dashboard ve mevcut kayıtlar sorunsuz çalışır.
 

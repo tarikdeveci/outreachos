@@ -12,7 +12,18 @@
       "yazilim_urun_rolleri": "www.seninsiten.com/cv-yazilim.pdf"
     },
     "projects": {
-      "ProjeAdi": "Projenin kısa açıklaması — hangi teknoloji, ne başardı."
+      "ProjeAdi": "Projenin kısa açıklaması: hangi teknoloji, ne başardı."
+    },
+    "education": "Üniversite, bölüm, mezuniyet ayı ve yılı (ör. Temmuz 2026)",
+    "work_experience": [
+      {"company": "Şirket", "role": "Stajyer Yazılım Mühendisi", "date": "2025 Yaz",
+       "highlight": "Ne yaptın, ölçülebilir sonucu neydi"}
+    ],
+    "certifications": ["Sertifika adı (veren kurum, yıl)"],
+    "targeting": {
+      "role_summary": "Aradığın rol, tek cümle (ör. junior AI / yazılım mühendisliği)",
+      "regions": ["Türkiye", "Avrupa", "uzaktan"],
+      "company_types": ["yatırım almış scaleup", "ürün şirketi"]
     },
     "project_sector_mapping": {
       "yazilim_ai_ml": "En güçlü ML/AI projen",

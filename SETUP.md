@@ -7,7 +7,8 @@ size günlük rapor yollar. Bilgisayarınızın açık olması gerekmez.
 Aylık maliyet: Anthropic API birkaç dolar, GitHub Actions ve arama ücretsiz kotada.
 
 Gerekenler: Python 3.10+, [GitHub CLI](https://cli.github.com/) (`gh auth login` yapılmış),
-bir Gmail hesabı. `pip install` yok, kod sadece standart kütüphaneyi kullanır.
+bir Gmail hesabı. Günlük motor için `pip install` yok, yalnızca standart kütüphane kullanılır
+(`requirements.txt` ve `Dockerfile` yalnızca isteğe bağlı yerel dashboard içindir).
 
 Aşağıdaki komutlarda `KULLANICI` yerine kendi GitHub kullanıcı adınızı yazın.
 
@@ -26,8 +27,10 @@ gh repo fork tarikdeveci/outreachos --clone
 gh repo create KULLANICI/outreachos-data --private --clone
 ```
 
-Kodu değiştirmeyecekseniz fork şart değil; workflow doğrudan bu repoyu klonlayabilir.
-Arama hedeflerini kendinize uyarlayacaksanız (aşağıda 7. bölüm) fork gerekir.
+Fork önerilir. Workflow doğrudan bu repoyu da klonlayabilir, ama o zaman sahibinin her
+push'u ertesi sabah sizin anahtarlarınızla ve Gmail'inizle çalışır. Fork etmeyecekseniz
+workflow'daki motor checkout adımına `ref: <commit SHA>` ekleyip sürümü sabitleyin. Arama
+hedeflerini kendinize uyarlayacaksanız (aşağıda 7. bölüm) fork zaten gerekir.
 
 ---
 
@@ -47,7 +50,12 @@ sayı mailde geçemez, denetim katmanı da iddiaları bu dosyayla karşılaştı
 - `profile.cv_links` (isteğe bağlı): anahtar → CV linki. Birden çok CV'niz varsa anahtarı rolü
   anlatacak biçimde adlandırın; taslak adımı şirkete uyanı seçer, link mailin sonuna eklenir.
   Tek CV'niz varsa tek satır yazın, hiç yoksa alanı silin.
+- `education`, `work_experience`, `certifications`: mezuniyet, staj ve sertifika cümleleri
+  yalnızca burada yazıyorsa mailde geçebilir; boş bırakırsanız denetim bunları uydurma sayar.
+- `targeting.role_summary`: aradığınız rol, tek cümle; taslak bunu rol cümlesinde kullanır.
 - `excluded_sectors`, `excluded_companies_seed`: hiç yazılmayacak sektör ve şirketler.
+- `daily_caps` yalnızca yerel dashboard içindir; günlük taslak sayısını `daily.yml` içindeki
+  `DAILY_TARGET` belirler (8. bölüm).
 - `excluded_companies_seed_personal`: tanıdığınız şirketler (otomasyon dokunmaz).
 - Abartmayın. Profilde olmayan bir iddia mailde çıkarsa taslak ⚠️ damgası alır.
 
@@ -70,6 +78,9 @@ on:
     - cron: "0 5 * * *"      # 05:00 UTC = 08:00 Europe/Istanbul
   workflow_dispatch:
 ```
+
+Cron'u eklemek güvenli: 4. bölümdeki Anthropic anahtarı ya da Gmail token'ı eksikken gerçek
+run hiçbir adayı işlemeden hata verir, eksik olanı log'a yazar.
 
 Sonra veri reposunu push edin:
 
@@ -103,6 +114,9 @@ Anahtar yoksa script çökmez, DuckDuckGo yedeğine düşer; ama `site:` sorgula
 
 1. Yeni proje → **Gmail API**'yi etkinleştirin.
 2. OAuth consent screen → External → kendi Gmail adresinizi **test user** olarak ekleyin.
+   Sonra **Publish app** ile durumu *In production* yapın: *Testing* durumunda Google refresh
+   token'ı 7 günde geçersiz kılar ve run'lar bir hafta sonra token hatasıyla durur. Doğrulanmamış
+   uygulama uyarısını kendi hesabınız için "Advanced" üzerinden geçebilirsiniz.
 3. Credentials → Create credentials → OAuth client ID → **Desktop app** → Client ID ve Secret.
 
 ```bash
@@ -165,15 +179,20 @@ gönderimi açmayın.
 
 ## 7) Hedefi kendinize uyarlama
 
-Şu an arama hedefi kodda sabit: **Türkiye ağırlıklı, junior yazılım / AI rolleri**. Alanınız
-veya ülkeniz farklıysa fork'unuzda şu dört yeri değiştirin:
+Arama hedefi kodda, sahibin profiline göre sabit: **yurt dışı ağırlıklı (Türkiye haftada iki
+gün, Pazartesi ve Cuma), yatırım almış scaleup'lar, junior yazılım / AI / ürün rolleri, mailler
+Türkçe (yabancı şirkete İngilizce)**. Alanınız veya ülkeniz farklıysa fork'unuzda şu yerleri
+değiştirin:
 
 | Dosya | Ne | Ne işe yarar |
 |---|---|---|
-| `scripts/discover.py` | `SEED_DIRECTORIES` | Taranan startup dizinleri ve portföy sayfaları |
-| `scripts/discover.py` | `todays_queries()` | Haftanın gününe göre arama sorguları |
-| `scripts/drafting.py` | `JUDGE_SYSTEM` | Hangi şirketin "uygun" sayılacağı |
-| `scripts/drafting.py` | `DRAFT_SYSTEM` | Mailin kimin ağzından, hangi tonda yazılacağı |
+| `scripts/discover.py` | `SEED_DIRECTORIES`, `SCALEUP_DIRECTORIES` | Taranan startup dizinleri ve portföy sayfaları |
+| `scripts/discover.py` | `QUERIES_BY_WEEKDAY`, `COMMON_QUERIES` | Haftanın gününe göre arama sorguları (bazıları sahibin nişine özel: iklim, karbon muhasebesi) |
+| `scripts/report.py` | `STARTUP_ATS_QUERIES`, `CORPORATE_QUERIES` | Günlük ilan özeti sorguları (junior, Türkiye şehirleri) |
+| `scripts/jobboard.py` | `_YER_IYI` | İlan konum tercihi (uzaktan, Türkiye ve Avrupa önce) |
+| `scripts/drafting.py` | `JUDGE_SYSTEM` | Hangi şirketin "uygun" sayılacağı. Savunma ve siber güvenliği ana ürün olan şirketleri **kodda** eler; `state.json` ile geri açılmaz |
+| `scripts/drafting.py` | `DRAFT_SYSTEM` | Mailin tonu ve dili |
+| `scripts/prep.py` | istem metni | Görüşme hazırlık notunun dili (Türkçe) |
 
 Rol ve kıdem filtreleri ise kodda değil, `state.json` içindedir (`profile.role_filters`).
 
@@ -207,7 +226,14 @@ ekip büyüklüğü aralığı, varsayılan `20,300`), `NAMED_CONTACT` (varsayı
 birlikte yayınlanmış kişi adresi genel kutunun önüne geçer; `0` yazarsanız yalnızca `info@`,
 `careers@` gibi genel kutulara yazılır), `ATS_ADAY_LIMIT` (yazılacak adresi olmayan
 şirketlerin ilan panosundan başvuru listesine bir run'da girebilecek yeni ilan, varsayılan
-`8`; `0` yazarsanız bu şirketler eskisi gibi atlanır).
+`8`; `0` yazarsanız bu şirketler eskisi gibi atlanır), `COUNTRIES` (ör. `TR,DE,NL`: yalnızca
+bu ülke uzantılı alan adları işlenir; `.com`, `.io` gibi uzantılar her zaman geçer; boşsa
+hepsi), `REPORT_TO` (rapor adresi; boşsa bağlı Gmail hesabının kendi adresi),
+`JUDGE_MODEL`, `DRAFT_MODEL`, `VERIFY_MODEL` (Anthropic model kimlikleri; bir model emekliye
+ayrılırsa her çağrı HTTP 400 döner, o zaman güncelini yazın), `OUTREACHOS_UA` (sitelere
+giden isteklerin User-Agent'ı; kendi repo adresinizi yazın ki site sahipleri size ulaşsın),
+`GMAIL_RETRY_BUDGET_SEC` ve `GMAIL_PAUSE_SEC` (Gmail kota hatasında bekleme bütçesi ve
+çağrılar arası bekleme).
 
 Run'dan sonra veri reponuzda `takip.md` oluşur: kimden yanıt geldi, kime cevap borçlusunuz,
 hangi ilan yeni. Görüşme daveti gelen firma için hazırlık notu da aynı dosyaya ve o günün
