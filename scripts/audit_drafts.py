@@ -107,8 +107,15 @@ def _b64(data: str) -> str:
         return ""
 
 
+def has_pdf(payload: dict) -> bool:
+    """Mesajda PDF eki var mı (CV eki kontrolü; çok parçalıyı gezerek)."""
+    if (payload.get("filename") or "").lower().endswith(".pdf"):
+        return True
+    return any(has_pdf(p) for p in payload.get("parts", []) or [])
+
+
 def parse_draft(draft_json: dict) -> dict:
-    """Gmail draft kaynağından {id, to, domain, subject, body} çıkarır (format=full)."""
+    """Gmail draft kaynağından {id, to, domain, subject, body, has_pdf} çıkarır (format=full)."""
     msg = draft_json.get("message", draft_json)
     payload = msg.get("payload", {})
     to = _header(payload, "To")
@@ -118,7 +125,8 @@ def parse_draft(draft_json: dict) -> dict:
             "to": email,
             "domain": email.split("@")[-1] if "@" in email else "",
             "subject": _header(payload, "Subject"),
-            "body": decode_body(payload)}
+            "body": decode_body(payload),
+            "has_pdf": has_pdf(payload)}
 
 
 def content_verdict(verify_result, numeric_problem) -> tuple:
@@ -277,6 +285,11 @@ if __name__ == "__main__":
         "mimeType": "text/plain", "body": {"data": enc}}}}
     p = parse_draft(dj)
     assert p["to"] == "careers@acme.io" and p["domain"] == "acme.io" and "Acme Panel" in p["body"], p
+    assert p["has_pdf"] is False
+    ekli = {"mimeType": "multipart/mixed", "parts": [
+        {"mimeType": "text/plain", "body": {"data": enc}},
+        {"mimeType": "application/pdf", "filename": "Tarik-CV.pdf", "body": {"attachmentId": "A"}}]}
+    assert has_pdf(ekli) and "Acme Panel" in decode_body(ekli)
 
     profile = {"name": "Aday", "projeler": ["Acme Panel"]}
     clean = {"temiz": True, "sorunlar": []}

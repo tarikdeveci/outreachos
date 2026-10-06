@@ -220,8 +220,12 @@ eleme adımı ...). Toplam sayı tek başına hangi kapının aday düşürdüğ
 
 **Role göre CV linki.** Profilde `cv_links` (anahtar → link) varsa `draft` şirketin işine en
 uygun CV'nin anahtarını seçer; linki gövdenin sonuna kod ekler (`attach_cv`). Linki model
-yazmaz: uzun bir adresi kopyalarken bozabilir. Anahtar geçersizse link eklenmez. Run
-logundaki `cv:<anahtar>` eki hangi CV'nin seçildiğini gösterir.
+yazmaz: uzun bir adresi kopyalarken bozabilir. Anahtar geçersizse profildeki ilk CV kullanılır.
+Run logundaki `cv:<anahtar>` eki hangi CV'nin seçildiğini gösterir. Gövdeye ayrıca
+`profile.portfolio` (kişisel site) satırı eklenir (`drafting.sign`). CV satırındaki PDF maile
+ek olarak da girer (`discover._draft_raw`): önce linkten indirilir, açılmazsa veri reposundaki
+`cv/` kopyası kullanılır. Ek ve site satırı olmayan eski taslaklar gönderimden hemen önce
+güncellenir; güncellenemeyen taslak o gün gitmez, kuyrukta kalır.
 
 ### Gerçek vakalar (bu yüzden bu kadar paranoyayız)
 - Model, profilde hiç olmayan *"fizyoterapi platformunda ürün geliştirdim"* cümlesini kurdu

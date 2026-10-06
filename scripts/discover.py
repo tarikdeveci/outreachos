@@ -38,6 +38,7 @@ import time
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
+from email.header import decode_header, make_header
 from email.message import EmailMessage
 from urllib.error import HTTPError, URLError
 from urllib.parse import unquote, urlencode, urlparse
@@ -835,10 +836,50 @@ def confirmed_vetoes(queued_ids: set, live_ids: set, scan_complete: bool, exists
     return {i for i in missing if exists_fn(i) is False}
 
 
-def _draft_raw(to: str, subject: str, body: str) -> str:
+CV_DIR = os.path.join(DATA_DIR, "cv")
+_cv_cache: dict = {}
+_cv_lock = threading.Lock()
+
+
+def cv_pdf(link: str, get_fn=None) -> tuple | None:
+    """Gövdedeki CV linkinin PDF'i, maile ek olarak: (dosya adı, bayt) ya da None.
+
+    Önce linkin kendisinden indirilir: güncel CV kişisel sitede duruyor. Site açılmazsa
+    veri reposundaki cv/ kopyası kullanılır (dosya adı linkin sonuyla eşleşen, ör.
+    ...-CV-AI-Engineer.pdf → ai-engineer.pdf). Run başına bir kez indirilir."""
+    with _cv_lock:
+        if link in _cv_cache:
+            return _cv_cache[link]
+        url = link if link.startswith(("http://", "https://")) else "https://" + link
+        ad = os.path.basename(urlparse(url).path) or "CV.pdf"
+        data = (get_fn or _get)(url, timeout=20, limit=5_000_000)
+        if not (data and data.startswith(b"%PDF")):
+            data = None
+            yerel = sorted(os.listdir(CV_DIR)) if os.path.isdir(CV_DIR) else []
+            for f in yerel:
+                if f.lower().endswith(".pdf") and ad.lower().endswith(f.lower()):
+                    with open(os.path.join(CV_DIR, f), "rb") as fh:
+                        data = fh.read()
+                    print(f"  ~ CV siteden indirilemedi ({url}), yerel kopya ekleniyor: cv/{f}")
+                    break
+            else:
+                print(f"  ! CV indirilemedi ve yerel kopyası yok ({url}): mail eksiz, linkle gider")
+        _cv_cache[link] = (ad, data) if data else None
+        return _cv_cache[link]
+
+
+def _draft_raw(to: str, subject: str, body: str, get_fn=None) -> str:
+    """Taslağın MIME'ı: düz metin gövde + gövdenin CV satırındaki PDF ek olarak."""
+    import drafting                                     # noqa: E402  (CV_LINE)
     msg = EmailMessage()
-    msg["To"], msg["Subject"] = to, subject
+    # Mevcut taslaktan okunan konu RFC 2047 kodlu gelebilir; olduğu gibi yazılırsa alıcı
+    # "=?utf-8?b?...?=" görür. Düz metin konuda decode_header değeri aynen döndürür.
+    msg["To"], msg["Subject"] = to, str(make_header(decode_header(subject)))
     msg.set_content(body)
+    m = drafting.CV_LINE.search(body)
+    pdf = cv_pdf(m.group(1), get_fn) if m else None
+    if pdf:
+        msg.add_attachment(pdf[1], maintype="application", subtype="pdf", filename=pdf[0])
     return base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
 
 
@@ -1425,6 +1466,7 @@ def main() -> int:
         engellenen: list = []       # son kapının durdurdukları (aynı yere ikinci mail)
         if allowed and not DRY_RUN:
             guncel = {r["id"]: r for r in audit_results}
+            taslaklar = {d["id"]: d for d in parsed_drafts}
             bilinen = autosend.sent_keys(state, deliverability.FREE_MAIL)
             run_keys: set = set()
             # Denetim sırası bugün gelmeyen (⏳) taslak 'temiz değil' DEĞİLDİR: kuyrukta
@@ -1460,6 +1502,15 @@ def main() -> int:
                     engellenen.append({**item, "why": neden})
                     print(f"    x {item['to']}: {neden}, gönderilmedi")
                     continue
+                # CV eki ve kişisel site: eski taslaklarda yok. Gitmeden hemen önce eklenir;
+                # eklenemezse taslak kuyrukta kalır, CV'siz gitmez.
+                t = taslaklar.get(item["id"])
+                if t:
+                    imzali = drafting.sign(t["body"], profile)
+                    if not t.get("has_pdf") or imzali != t["body"].replace("\r\n", "\n").rstrip():
+                        if not update_draft(item["id"], item["to"], t["subject"], imzali, token):
+                            print(f"    ~ {item['to']}: CV eklenemedi, bu run'da gönderilmedi")
+                            continue
                 mid = send_draft(item["id"], token)
                 if mid:
                     autosend.record_sent(state, item, today, mid)
@@ -2089,6 +2140,35 @@ def _self_test() -> int:
     finally:
         _post_json = gercek_post
         os.environ.pop("SERPER_API_KEY", None)
+
+    # --- CV eki: gövdedeki CV satırının PDF'i maile ek olarak girer (ağa çıkmadan) ---
+    import email as _email
+    from email import policy as _policy
+    pdf = b"%PDF-1.4 sahte cv"
+    istenen: list = []
+
+    def _sahte_get(url, **k):
+        istenen.append(url)
+        return pdf if url.endswith("CV-AI.pdf") else b"<html>404</html>"
+
+    _cv_cache.clear()
+    govde = "Merhaba,\nTarık\n\nCV: www.ornek.com/assets/CV-AI.pdf\nWeb: www.ornek.com"
+    for _ in range(2):              # ikinci taslakta tekrar indirilmez
+        raw = _draft_raw("hi@acme.io", "=?utf-8?b?QmHFn3Z1cnU=?=", govde, _sahte_get)
+    assert istenen == ["https://www.ornek.com/assets/CV-AI.pdf"], istenen
+    msg = _email.message_from_bytes(base64.urlsafe_b64decode(raw + "==="), policy=_policy.default)
+    assert msg["Subject"] == "Başvuru", msg["Subject"]       # kodlu konu düz yazılır
+    ekler = list(msg.iter_attachments())
+    assert len(ekler) == 1 and ekler[0].get_filename() == "CV-AI.pdf"
+    assert ekler[0].get_content() == pdf
+    assert "Web: www.ornek.com" in msg.get_body(("plain",)).get_content()
+    # CV satırı olmayan gövde ve indirilemeyen (yerel kopyası da olmayan) CV: eksiz
+    for g in ("Merhaba.", "Merhaba.\n\nCV: www.ornek.com/yok-boyle-bir-cv.pdf"):
+        with redirect_stdout(io.StringIO()):
+            m2 = _email.message_from_bytes(base64.urlsafe_b64decode(
+                _draft_raw("hi@acme.io", "Konu", g, _sahte_get) + "==="), policy=_policy.default)
+        assert not list(m2.iter_attachments()) and not m2.is_multipart()
+    _cv_cache.clear()
 
     print("discover self-test: OK")
     return 0

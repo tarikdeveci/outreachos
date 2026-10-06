@@ -215,12 +215,45 @@ def draft(company: dict, site_text: str, profile: dict, sektor: str,
     return _call(DRAFT_MODEL, DRAFT_SYSTEM, user, "govde", max_tokens=4000)
 
 
+# Gövdenin sonundaki CV satırı. discover._draft_raw bu satırdaki PDF'i maile ek olarak koyar.
+CV_LINE = re.compile(r"^CV:\s*(\S+\.pdf)\s*$", re.M | re.I)
+
+
+def site_link(profile: dict) -> str:
+    """Profildeki kişisel site (portfolio), mailde tıklanır halde: 'www.' ile."""
+    s = (profile.get("portfolio") or "").strip().rstrip("/")
+    if not s:
+        return ""
+    return s if s.startswith(("http://", "https://", "www.")) else "www." + s
+
+
+def sign(body: str, profile: dict, link: str = "") -> str:
+    """Gövdenin sonuna CV satırı ve kişisel site satırı ekler (eksik olanı, bir kez).
+
+    CV satırı yoksa `link`, o da yoksa profildeki ilk CV kullanılır: her mailde CV olsun.
+    Site, gövdede CV linkinin dışında hiç geçmiyorsa eklenir (CV linki aynı domainde)."""
+    body = (body or "").replace("\r\n", "\n").rstrip()
+    ek = []
+    if not CV_LINE.search(body):
+        link = link or next(iter((profile.get("cv_links") or {}).values()), "")
+        if link:
+            ek.append(f"CV: {link}")
+    site = site_link(profile)
+    alan = re.sub(r"^(https?://)?(www\.)?", "", site).lower()
+    if alan and alan not in CV_LINE.sub("", body).lower():
+        ek.append(f"Web: {site}")
+    if not ek:
+        return body
+    son = body.rsplit("\n", 1)[-1]
+    return body + ("\n" if CV_LINE.match(son) else "\n\n") + "\n".join(ek)
+
+
 def attach_cv(d: dict, profile: dict) -> None:
-    """Modelin seçtiği CV'nin linkini gövdenin sonuna ekler. Linki model yazmaz: uzun bir
-    adresi harf harf kopyalarken bozabilir; seçimi model yapar, metni profil verir."""
-    link = (profile.get("cv_links") or {}).get(str(d.get("cv") or ""))
-    if link and link not in d.get("govde", ""):
-        d["govde"] = d["govde"].rstrip() + f"\n\nCV: {link}"
+    """Modelin seçtiği CV'nin linkini ve kişisel siteyi gövdenin sonuna ekler. Linki model
+    yazmaz: uzun bir adresi harf harf kopyalarken bozabilir; seçimi model yapar, metni
+    profil verir."""
+    link = (profile.get("cv_links") or {}).get(str(d.get("cv") or ""), "")
+    d["govde"] = sign(d.get("govde", ""), profile, link)
 
 
 # ---------------------------------------------------------------- 3) doğrulama
@@ -447,6 +480,19 @@ if __name__ == "__main__":
     cvp = {"cv_links": {"ai": "www.ornek.com/cv-ai.pdf", "yazilim": "www.ornek.com/cv-yazilim.pdf"}}
     t1, t2 = {"govde": "Merhaba.\n", "cv": "ai"}, {"govde": "Merhaba.", "cv": "olmayan"}
     attach_cv(t1, cvp), attach_cv(t1, cvp), attach_cv(t2, cvp)
-    assert t1["govde"] == "Merhaba.\n\nCV: www.ornek.com/cv-ai.pdf" and t2["govde"] == "Merhaba."
+    assert t1["govde"] == "Merhaba.\n\nCV: www.ornek.com/cv-ai.pdf", t1
+    # geçersiz CV seçimi: CV'siz mail gitmez, profildeki ilk CV kullanılır
+    assert t2["govde"] == "Merhaba.\n\nCV: www.ornek.com/cv-ai.pdf", t2
     assert numeric_check(t1["govde"], prof) is None
+    # kişisel site: CV satırının altına bir kez; CV linki aynı domainde olsa da site sayılmaz
+    sp = {"portfolio": "tarikdeveci.com",
+          "cv_links": {"ai": "www.tarikdeveci.com/assets/CV-AI.pdf"}}
+    s1 = sign("Merhaba,\r\nTarık\r\n", sp)
+    assert s1 == "Merhaba,\nTarık\n\nCV: www.tarikdeveci.com/assets/CV-AI.pdf\nWeb: www.tarikdeveci.com", s1
+    assert sign(s1, sp) == s1
+    s2 = sign("Merhaba.\n\nCV: www.tarikdeveci.com/assets/CV-AI.pdf", sp)
+    assert s2.endswith("CV-AI.pdf\nWeb: www.tarikdeveci.com"), s2
+    assert sign("Portfolyom: tarikdeveci.com\n\nCV: x.com/cv.pdf", sp).count("tarikdeveci.com") == 1
+    assert sign("Merhaba.", {}) == "Merhaba."
+    assert numeric_check(s1, prof) is None
     print("drafting self-test: OK")
