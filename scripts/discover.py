@@ -1377,11 +1377,17 @@ def main() -> int:
         izin = {str(v.get("email", "")).split("@")[-1].lower(): v["sayi_izni"]
                 for v in state.get("companies_already_contacted", {}).values()
                 if isinstance(v, dict) and v.get("sayi_izni")}
+        # Taslağın yazıldığı dil de kayıtta (dil): yanlış dildeki taslak ⚠ olur, onarım onu
+        # siler ve firma doğru dilde yeniden yazılır. Kaydı olmayan eski taslakta denetlenmez.
+        dil = {str(v.get("email", "")).split("@")[-1].lower(): v["dil"]
+               for v in state.get("companies_already_contacted", {}).values()
+               if isinstance(v, dict) and v.get("dil")}
         audit_results = audit_drafts.audit(
             [d for d in parsed_drafts if d["id"] in bizim], profile, sent_domains,
             verify_fn=(None if DRY_RUN else drafting.verify),
             numeric_fn=lambda body, prof, alan="": drafting.numeric_check(
-                body, prof, f"{alan} {izin.get(alan, '')}"),
+                body, prof, f"{alan} {izin.get(alan, '')}") or drafting.dil_sorunu(
+                body, dil.get(alan, "")),
             cache=audit_cache, max_verify=AUDIT_MAX_VERIFY, rules=rules)
 
         # Onarım, silme ve otomatik gönderim YALNIZCA motorun kendi açtığı taslaklara dokunur
@@ -1692,7 +1698,8 @@ def main() -> int:
                             "skor_gerekce": verdict.get("skor_gerekce", ""),
                             "hedef_kisiler": hedef[:3],
                             "linkedin_mesaji": verdict.get("linkedin_mesaji", ""),
-                            "sayi_izni": verdict.get("sayi_izni", "")})
+                            "sayi_izni": verdict.get("sayi_izni", ""),
+                            "dil": verdict.get("dil", "")})
             n = len(drafted)
         cv = verdict.get("cv") if "\nCV: " in verdict.get("govde", "") else "yok"
         print(f"  + {d} → {email} ({'taslak ' + str(draft_id) if draft_id else 'DRY_RUN'}) "
@@ -1750,7 +1757,8 @@ def main() -> int:
         state.setdefault("companies_already_contacted", {})[x["firma"]] = {
             "date": today, "channel": "gmail_draft_speculative", "email": x["email"],
             "draft_id": x["draft_id"], "last_reply_seen": None,
-            **({"sayi_izni": x["sayi_izni"]} if x.get("sayi_izni") else {})}
+            **({"sayi_izni": x["sayi_izni"]} if x.get("sayi_izni") else {}),
+            **({"dil": x["dil"]} if x.get("dil") else {})}
     state["last_run_date"] = today
     state["total_drafts_created_lifetime"] = state.get("total_drafts_created_lifetime", 0) + len(drafted)
     state["daily_caps_note"] = (f"{today} hibrit run: {len(cands)} aday domain, "

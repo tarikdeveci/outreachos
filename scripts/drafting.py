@@ -183,9 +183,10 @@ DRAFT_SYSTEM = (
     "somut bir detay geçir. Sektöre en uygun 1-2 projeyi bağla. Profilde "
     "'targeting.role_summary' varsa başvuranın aradığı rol odur: yeri gelirse tek cümleyle, "
     "şirketin işine bağlayarak söyle; oradan deneyim ya da başarı iddiası çıkarma, maaştan "
-    "söz etme. Türkçe yaz (şirket "
-    "yabancıysa İngilizce). Linkleri düz metin (ornek.com). Klişe, abartılı övgü, "
-    "telefon numarası yok. Kapanış mailin diliyle aynı olsun.\n\n"
+    "söz etme. DİL: mailin dili kullanıcı mesajında 'MAİL DİLİ' olarak verilir ve "
+    "zorunludur; konu, gövde, hitap ve kapanışın tamamı o dilde olur (yabancı şirkete "
+    "Türkçe tek cümle bile yazma). Linkleri düz metin (ornek.com). Klişe, abartılı övgü, "
+    "telefon numarası yok.\n\n"
     "AYRICA (mail dışında, rapor için):\n"
     "- uygunluk_skoru: 0-100, başvuranın profiliyle şirketin örtüşmesi (85+ çok güçlü, "
     "60-84 makul, 60 altı zayıf) + tek cümlelik skor_gerekce.\n"
@@ -200,9 +201,44 @@ DRAFT_SYSTEM = (
 )
 
 
+TR_HARF = re.compile(r"[ğĞşŞıİ]")       # Türkçeye özgü; ç/ö/ü Almanca, Fransızcada da var
+
+
+def turkce_mi(text: str) -> bool:
+    """Metin Türkçe mi. Türkçe düzyazıda ğ/ş/ı/İ harflerin ~%7'si; İngilizce bir mailde yalnızca
+    'Tarık', 'Bahçeşehir' gibi özel adlardan gelir (%0.5 altı). Eşik ikisinin arasında."""
+    harf = sum(c.isalpha() for c in text or "")
+    return harf > 0 and len(TR_HARF.findall(text)) / harf >= 0.02
+
+
+def mail_dili(domain: str, site_text: str) -> str:
+    """Şirkete hangi dilde yazılacağı: 'tr' (.tr uzantılı ya da sitesi Türkçe) yoksa 'en'.
+    Modele bırakılmaz: 'şirket yabancıysa İngilizce' talimatına rağmen yabancı şirketlere
+    Türkçe mail gitti (2026-10, Elyos, Blue Onion, Lago ...)."""
+    if (domain or "").lower().rstrip(".").endswith(".tr") or turkce_mi(site_text[:3000]):
+        return "tr"
+    return "en"
+
+
+DIL_ADI = {"tr": "Türkçe", "en": "İngilizce"}
+
+
+def dil_sorunu(text: str, dil: str) -> str | None:
+    """Mail (konu + gövde) beklenen dilde değilse sorun metni. `dil` bilinmiyorsa None.
+    Sorun metni audit_drafts.LANG_PREFIX ile başlar: onarım bunu tanır, taslağı çevirmeye
+    çalışmaz (konu da yanlış dilde), siler; firma doğru dilde yeniden yazılır."""
+    if dil not in DIL_ADI:
+        return None
+    if turkce_mi(CV_LINE.sub("", text)) == (dil == "tr"):
+        return None
+    return (f"DİL: mail {DIL_ADI['tr' if dil == 'en' else 'en']} yazılmış, şirkete "
+            f"{DIL_ADI[dil]} yazılmalı (konu ve gövde)")
+
+
 def draft(company: dict, site_text: str, profile: dict, sektor: str,
-          today: str, duzeltme: str = "") -> dict | None:
-    user = (f"BUGÜNÜN TARİHİ: {today}\n\n"
+          today: str, duzeltme: str = "", dil: str = "en") -> dict | None:
+    user = (f"BUGÜNÜN TARİHİ: {today}\n"
+            f"MAİL DİLİ: {DIL_ADI.get(dil, 'İngilizce')}\n\n"
             f"ŞİRKET: {company['domain']} ({sektor})\nSite metni:\n{site_text[:3000]}\n\n"
             f"--- BAŞVURAN PROFİLİ (tek gerçek kaynak) ---\n"
             f"{json.dumps(profile, ensure_ascii=False)}")
@@ -381,10 +417,20 @@ def judge_draft_verify(company: dict, site_text: str, profile: dict,
     sektor = j.get("sektor", "")
     duzeltme = ""
     alan = str(company.get("domain", ""))
+    dil = mail_dili(alan, site_text)
     for deneme in range(2):                      # bir kez düzeltme şansı
-        d = draft(company, site_text, profile, sektor, today, duzeltme)
+        d = draft(company, site_text, profile, sektor, today, duzeltme, dil)
         if not d or not d.get("govde"):
             return None, "taslak üretilemedi"
+        # Dil denetimi doğrulamadan önce: kesin ve bedava; yanlış dildeki maile LLM harcanmaz.
+        dil_hatasi = dil_sorunu(f"{d.get('konu', '')}\n{d['govde']}", dil)
+        if dil_hatasi:
+            if deneme == 0:
+                duzeltme = dil_hatasi
+                print(f"    ~ {dil_hatasi}, yeniden yazılıyor")
+                continue
+            return None, dil_hatasi
+        d["dil"] = dil
         # Deterministik sayı denetimi önce: ucuz ve kesin. Modelin gördüğü site metnindeki
         # sayılar şirketin kendi sayısıdır; başvuranın iddialarını verify() profile bağlar.
         sayi_sorunu = numeric_check(d["govde"], profile, f"{alan} {site_text[:3000]}")
@@ -495,4 +541,35 @@ if __name__ == "__main__":
     assert sign("Portfolyom: tarikdeveci.com\n\nCV: x.com/cv.pdf", sp).count("tarikdeveci.com") == 1
     assert sign("Merhaba.", {}) == "Merhaba."
     assert numeric_check(s1, prof) is None
+
+    # dil: Türkçe/İngilizce ayrımı, özel adlar (Tarık, Bahçeşehir) İngilizce maili Türkçe yapmaz
+    tr_mail = ("Merhaba,\n\nBlue Onion'ın her modülü tek bir doğruluk kaynağı üzerine kurma "
+               "yaklaşımını ilgiyle okudum. Şu an Propose'da çalışıyorum.\n\nİyi çalışmalar,\nTarık")
+    en_mail = ("Hi,\n\nI came across Axle Health and liked the approach to AI scheduling. I graduated "
+               "in July 2026 (B.Sc. Software Engineering, Bahçeşehir University).\n\nBest,\nTarık Deveci"
+               "\n\nCV: www.tarikdeveci.com/assets/Tarik-Deveci-CV-AI-Engineer.pdf")
+    assert turkce_mi(tr_mail) and not turkce_mi(en_mail)
+    assert mail_dili("acme.com.tr", "We build tools") == "tr"
+    assert mail_dili("acme.com", "Otelciler için yapay zekâ araçları geliştiriyoruz; ekibimiz İstanbul'da.") == "tr"
+    assert mail_dili("elyos.ai", "AI agents for trades businesses. Book a demo.") == "en"
+    assert dil_sorunu(en_mail, "en") is None and dil_sorunu(tr_mail, "tr") is None
+    assert dil_sorunu(tr_mail, "en").startswith("DİL:") and "İngilizce" in dil_sorunu(tr_mail, "en")
+    assert dil_sorunu(en_mail, "tr").startswith("DİL:")
+    assert dil_sorunu(tr_mail, "") is None                     # dili kayıtlı olmayan eski taslak
+    # yazma: yanlış dilde gelen taslak bir kez düzeltmeye gider, yine yanlışsa elenir
+    asil = (judge, draft, verify)       # modül düzeyi: atama global adı değiştirir
+    istek: list = []
+    try:
+        judge = lambda c, s: {"uygun": True, "sektor": "ai"}
+        verify = lambda b, p: {"temiz": True, "sorunlar": []}
+        cevaplar = [{"konu": "Başvuru", "govde": tr_mail}, {"konu": "Application", "govde": en_mail}]
+        draft = lambda *a: istek.append(a) or cevaplar.pop(0)
+        d, sebep = judge_draft_verify({"domain": "axle.io"}, "AI scheduling for clinics", {}, "t")
+        assert d and d["dil"] == "en" and sebep == "", sebep
+        assert istek[0][-1] == "en" and istek[1][-2].startswith("DİL:")
+        cevaplar = [{"konu": "Başvuru", "govde": tr_mail}] * 2
+        d, sebep = judge_draft_verify({"domain": "axle.io"}, "AI scheduling", {}, "t")
+        assert d is None and sebep.startswith("DİL:")
+    finally:
+        judge, draft, verify = asil
     print("drafting self-test: OK")

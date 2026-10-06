@@ -36,6 +36,8 @@ import re
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 SAFE, DUPLICATE, CONTENT, REVIEW, PENDING = "GUVENLI", "MUKERRER", "ICERIK", "INCELE", "BEKLEMEDE"
+# Yanlış dilde yazılmış taslağın sorun metni bununla başlar (drafting.dil_sorunu).
+LANG_PREFIX = "DİL:"
 _EMOJI = {SAFE: "✅", DUPLICATE: "🔁", CONTENT: "⚠", REVIEW: "👀", PENDING: "⏳"}
 # Etiketler durumu söyler, kullanıcıya iş vermez: ne yapıldığını onarım ve gönderim blokları yazar.
 _LABEL = {SAFE: "TEMİZ", DUPLICATE: "MÜKERRER", CONTENT: "İÇERİK HATASI",

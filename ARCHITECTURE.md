@@ -227,6 +227,14 @@ ek olarak da girer (`discover._draft_raw`): önce linkten indirilir, açılmazsa
 `cv/` kopyası kullanılır. Ek ve site satırı olmayan eski taslaklar gönderimden hemen önce
 güncellenir; güncellenemeyen taslak o gün gitmez, kuyrukta kalır.
 
+**Mail dili kodda belirlenir.** "Şirket yabancıysa İngilizce" talimatı modele bırakıldığında
+yabancı şirketlere Türkçe mail gitti. `drafting.mail_dili`: alan adı `.tr` ise ya da sitesi
+Türkçeyse Türkçe, değilse İngilizce. Karar modele `MAİL DİLİ` olarak verilir; konu ve gövde
+yazıldıktan sonra Türkçeye özgü harf oranıyla (`turkce_mi`) denetlenir, tutmazsa bir kez
+yeniden yazılır, yine tutmazsa taslak açılmaz. Dil kayda (`dil`) yazılır; bekleyen taslak
+denetimi gövdeyi bu dille karşılaştırır, yanlış dildeki taslak onarılmaz (konu da yanlış
+dilde) silinir ve firma doğru dilde yeniden yazılır.
+
 ### Gerçek vakalar (bu yüzden bu kadar paranoyayız)
 - Model, profilde hiç olmayan *"fizyoterapi platformunda ürün geliştirdim"* cümlesini kurdu
   ve mail gerçek bir şirkete gitti. → `verify` adımı bu yüzden ayrıldı.

@@ -110,6 +110,13 @@ def run(results: list, drafts: dict, state: dict, cache: dict, *, today: str,
             st["unwrapped"].append(r)
             continue
 
+        # Yanlış dilde yazılmış taslak çevrilmez: konu da yanlış dilde ve onarım yalnızca
+        # gövdeyi değiştirir. Silinir; firma havuza döner ve doğru dilde yeniden yazılır.
+        dil = [x for x in r["reasons"] if str(x).startswith(audit_drafts.LANG_PREFIX)]
+        if dil:
+            if not delete(r, str(dil[0])):
+                st["failed"].append({**r, "why": str(dil[0])})
+            continue
         rec = memo.get(r["id"])
         if rec and rec.get("hash") == audit_drafts.body_hash(d["body"]):
             if not delete(r, "onarılamadı: " + str(rec.get("sebep", ""))):
@@ -269,4 +276,19 @@ if __name__ == "__main__":
     st, *_ = go(True, {}, max_llm=10)
     lines = summary_lines(st, True)
     assert "Otomatik onarım" in lines[0] and any("silindi" in ln for ln in lines)
+
+    # --- yanlış dil: onarım LLM'i çağrılmaz; silme açıksa silinir, kapalıysa başarısız sayılır
+    dil_sebep = audit_drafts.LANG_PREFIX + " mail Türkçe yazılmış, şirkete İngilizce yazılmalı"
+    for acik in (True, False):
+        calls["n"] = 0
+        silinen: list = []
+        res = [{"id": "tr", "to": "hi@x.io", "domain": "x.io", "subject": "Konu",
+                "verdict": C, "reasons": [dil_sebep]}]
+        st = run(res, {"tr": {"id": "tr", "to": "hi@x.io", "subject": "Konu", "body": "Merhaba"}},
+                 {}, {}, today="t", repair_fn=counting, update_fn=lambda *a: True,
+                 delete_fn=lambda i: silinen.append(i) or True, key_fn=lambda b: b,
+                 strip_urls=drafting.strip_urls, max_llm=10, allow_delete=acik)
+        assert calls["n"] == 0
+        assert (silinen, len(st["deleted"]), len(st["failed"])) == \
+            ((["tr"], 1, 0) if acik else ([], 0, 1)), (acik, silinen, st)
     print("repair self-test: OK")
