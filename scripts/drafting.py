@@ -263,12 +263,23 @@ def site_link(profile: dict) -> str:
     return s if s.startswith(("http://", "https://", "www.")) else "www." + s
 
 
+def tiresiz(text: str) -> str:
+    """Uzun ve orta tireyi metinden çıkarır: kullanıcı maillerinde ikisini de istemiyor.
+
+    Boşluklu tire cümle arası ayraçtır, virgül olur. Boşluksuz olan aralıktır
+    (2024–2025, Temmuz–Ağustos), kısa tire olur."""
+    text = re.sub(r"\s*[—–]\s+|\s+[—–]\s*", ", ", text or "")
+    text = re.sub(r"[—–]", "-", text)
+    return re.sub(r",\s*([,.;:!?])", r"\1", text)
+
+
 def sign(body: str, profile: dict, link: str = "") -> str:
     """Gövdenin sonuna CV satırı ve kişisel site satırı ekler (eksik olanı, bir kez).
 
     CV satırı yoksa `link`, o da yoksa profildeki ilk CV kullanılır: her mailde CV olsun.
-    Site, gövdede CV linkinin dışında hiç geçmiyorsa eklenir (CV linki aynı domainde)."""
-    body = (body or "").replace("\r\n", "\n").rstrip()
+    Site, gövdede CV linkinin dışında hiç geçmiyorsa eklenir (CV linki aynı domainde).
+    Uzun ve orta tire de burada temizlenir (tiresiz)."""
+    body = tiresiz((body or "").replace("\r\n", "\n").rstrip())
     ek = []
     if not CV_LINE.search(body):
         link = link or next(iter((profile.get("cv_links") or {}).values()), "")
@@ -540,6 +551,11 @@ if __name__ == "__main__":
     assert s2.endswith("CV-AI.pdf\nWeb: www.tarikdeveci.com"), s2
     assert sign("Portfolyom: tarikdeveci.com\n\nCV: x.com/cv.pdf", sp).count("tarikdeveci.com") == 1
     assert sign("Merhaba.", {}) == "Merhaba."
+    assert tiresiz("ilgimi çekti — özellikle AI.") == "ilgimi çekti, özellikle AI."
+    assert tiresiz("Temmuz 2024–Mart 2025 arası") == "Temmuz 2024-Mart 2025 arası"
+    assert tiresiz("AI Engineer – FamPay") == "AI Engineer, FamPay"
+    assert tiresiz("bitti —.") == "bitti."
+    assert "—" not in sign("A — B", sp) and tiresiz("a-b, c") == "a-b, c"
     assert numeric_check(s1, prof) is None
 
     # dil: Türkçe/İngilizce ayrımı, özel adlar (Tarık, Bahçeşehir) İngilizce maili Türkçe yapmaz

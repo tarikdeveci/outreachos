@@ -1513,8 +1513,10 @@ def main() -> int:
                 t = taslaklar.get(item["id"])
                 if t:
                     imzali = drafting.sign(t["body"], profile)
-                    if not t.get("has_pdf") or imzali != t["body"].replace("\r\n", "\n").rstrip():
-                        if not update_draft(item["id"], item["to"], t["subject"], imzali, token):
+                    konu = drafting.tiresiz(t["subject"])
+                    if (not t.get("has_pdf") or konu != t["subject"]
+                            or imzali != t["body"].replace("\r\n", "\n").rstrip()):
+                        if not update_draft(item["id"], item["to"], konu, imzali, token):
                             print(f"    ~ {item['to']}: CV eklenemedi, bu run'da gönderilmedi")
                             continue
                 mid = send_draft(item["id"], token)
