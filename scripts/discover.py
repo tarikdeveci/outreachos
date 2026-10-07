@@ -51,6 +51,7 @@ import board
 import jobboard
 import prep
 import report
+import report_html
 import tracking
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -75,6 +76,7 @@ BUDGET_SEC = int(os.environ.get("BUDGET_SEC", "2400"))       # 40 dk
 WORKERS = int(os.environ.get("WORKERS", "6"))
 # Adresi olmayan adayların ilan panosundan başvuru listesine bir run'da girebilecek yeni ilan.
 ATS_ADAY_LIMIT = int(os.environ.get("ATS_ADAY_LIMIT", "8"))
+ILAN_KONTROL_SN = int(os.environ.get("ILAN_KONTROL_SN", "150"))   # ilan doğrulamasının süre tavanı
 PANO_RET_KEY, PANO_RET_GUN = "pano_ret", 14     # elemeden geçmeyen panonun şirketi 14 gün yeniden sorulmaz
 DELIVER_WINDOW_DAYS = int(os.environ.get("DELIVER_WINDOW_DAYS", "30"))
 BOUNCE_WATCH = float(os.environ.get("BOUNCE_WATCH", "0.03"))
@@ -245,6 +247,18 @@ def _get(url: str, headers: dict | None = None, timeout: int = 20,
             return r.read(limit)            # sayfa başına 400KB tavan
     except (HTTPError, URLError, TimeoutError, OSError, ValueError):   # ValueError: ASCII dışı URL
         return None
+
+
+def _get_durum(url: str, timeout: int = 8, limit: int = 2_000_000) -> tuple:
+    """(HTTP kodu, gövde, son URL). Kod 0 ağ hatasıdır: "ilan kapanmış" (404) ile "siteye
+    ulaşılamadı" ayrı sonuçlardır, _get ikisini de None'a indirir."""
+    try:
+        with urlopen(Request(url, headers={"User-Agent": UA}), timeout=timeout) as r:
+            return r.status, r.read(limit), r.geturl()
+    except HTTPError as e:
+        return e.code, b"", url
+    except (URLError, TimeoutError, OSError, ValueError):
+        return 0, b"", url
 
 
 def _post_json(url: str, payload: dict, headers: dict, timeout: int = 60,
@@ -1783,7 +1797,34 @@ def main() -> int:
 
     # --- takip panosu: ilan defteri (başvurulan ilan listeden düşer) + firma durumları
     # Pano arızası raporu düşürmesin: state yukarıda yazıldı, rapor hatayı gösterir.
+    pano = None
     try:
+        # Her ilan panonun kendi kaydına sorulur: arama haftalar önce kapanmış ilanı da getirir.
+        # Süre tavanı dolunca kalanlar "bilinmiyor" sayılır, sonraki run'da sorulur.
+        cevaplar: dict = {}
+        son_an = time.monotonic() + ILAN_KONTROL_SN
+
+        def ilan_sor(link: str) -> dict:
+            if time.monotonic() > son_an:
+                return {"durum": jobboard.BILINMIYOR, "title": "", "yer": "", "yayin": ""}
+            return jobboard.verify_posting(
+                link, lambda u: cevaplar[u] if u in cevaplar else cevaplar.setdefault(u, _get_durum(u)))
+
+        def ilan_rolu(title: str) -> bool:
+            """İlanın gerçek başlığı: kıdem ve sert eleme geçerli; rol bir kategoriye ya da
+            sorguların aradığı teknik aileye uymalı."""
+            ok, why, _ = pipeline.role_filter(title, profile)
+            return ok and (why.startswith("uygun rol") or bool(report.TEKNIK_ROL.search(title)))
+
+        try:                                               # kontrol arızası panoyu düşürmesin
+            gelen = len(ats_digest)
+            ats_digest = board.dogrula_ilanlar(state, ats_digest, ilan_sor, ilan_rolu, today)
+            dusen = sum(1 for v in state.get(board.LEDGER_KEY, {}).values() if v.get("kapali") == today)
+            log.append(f"  İlan kontrolü: {gelen} ilandan {len(ats_digest)} açık, "
+                       f"{dusen} kapanmış ya da role uymuyor")
+        except Exception as e:                              # noqa: BLE001
+            log.append(f"  ! İlan kontrolü yapılamadı ({type(e).__name__}: {e})")
+            print(log[-1])
         board.update_ledger(state, ats_digest, today)
         # Aday panosundan gelen ilan rapora yalnızca ilk görüldüğü gün girer; açık kaldığı
         # sürece takip.md'de durur. Her gün aynı listeyi tekrar etmek raporu okunmaz yapar.
@@ -1833,9 +1874,9 @@ def main() -> int:
             f.write("_Bugün taslak açılmadı._\n")
         f.write(f"\n## ATS/Portal Üzerinden Başvurulacaklar ({len(ats_digest)})\n\n")
         for a in ats_digest:
-            f.write(f"- **{a['firma']}** — {a['title']} — {a['link']}\n")
+            f.write(f"- **{a['firma']}**: {a['title']} ({report.ilan_notu(a, today)}): {a['link']}\n")
         if not ats_digest:
-            f.write("_Bugün uygun yeni ATS ilanı bulunamadı._\n")
+            f.write("_Bugün açık olduğu doğrulanan yeni ATS ilanı yok._\n")
         queue = state.get("redraft_queue", [])
         bekleyen = [q for q in queue if q.get("durum", "bekliyor") == "bekliyor"]
         if requeued or bekleyen:
@@ -1888,8 +1929,8 @@ def main() -> int:
             lines.append("")
     if ats_digest:
         lines.append("### ATS/Portal üzerinden başvurulacaklar (sen başvur)\n")
-        lines += [f"- {'**YENİ** ' if a.get('yeni') else ''}**{a['firma']}** — {a['title']} — {a['link']}"
-                  for a in ats_digest] + [""]
+        lines += [f"- {'**YENİ** ' if a.get('yeni') else ''}**{a['firma']}**: {a['title']} "
+                  f"({report.ilan_notu(a, today)}): {a['link']}" for a in ats_digest] + [""]
     li = report.build_linkedin_targets(drafted)
     if li:
         lines.append("### LinkedIn — bugün elle ulaş (en uygun 5 firma; hesabın güvende)\n")
@@ -1915,8 +1956,20 @@ def main() -> int:
             today, profile, drafted, ats_digest, reply_notes, skipped,
             banner_lines=banner_lines, audit_lines=audit_lines, send_lines=send_lines,
             takip_lines=takip_lines)
-        subject = f"İş arama raporu {today}: {len(drafted)} taslak, {len(ats_digest)} ATS"
-        rid = report.send_self_report(to, subject, text, token) if to else None
+        giden = [s for s in state.get(autosend.SENT_KEY, []) if s.get("date") == today]
+        acik_ilan = len(pano["ats"]) if pano else len(ats_digest)
+        subject = (f"İş arama {today}: {len(giden)} mail gitti, {len(drafted)} yeni taslak, "
+                   f"{acik_ilan} açık ilan")
+        # HTML kurulamazsa rapor düz metinle gider: görünüm arızası raporu düşürmesin.
+        try:
+            html = report_html.build_report_html(
+                today, pano, ats_digest, drafted, reply_notes, skipped, giden=giden,
+                kuyruk=state.get(autosend.QUEUE_KEY, []), banner_lines=banner_lines,
+                audit_lines=audit_lines, send_lines=send_lines, takip_lines=takip_lines)
+        except Exception as e:                              # noqa: BLE001
+            html = None
+            print(f"  ! Rapor HTML'i kurulamadı, düz metin gidiyor ({type(e).__name__}: {e})")
+        rid = report.send_self_report(to, subject, text, token, html=html) if to else None
         durum = f"gönderildi ({rid})" if rid else "gönderilemedi — GitHub issue yedeği devrede"
         print(f"  ✉ Rapor {durum} → {to}")
 

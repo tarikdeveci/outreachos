@@ -437,6 +437,12 @@ kayıtlardan türetilir. Elle işaretlenen bir alan yoktur; kullanıcıya soru s
   gelen kayıt başvuru kabul edilir.
 - **Firma durumu (`board.py`).** görüşme, yanıt geldi, otomatik yanıt, ret, gönderildi (yanıt
   yok), taslak bekliyor, bounce, kapandı. Durum her run'da kayıttan yeniden hesaplanır.
+- **İlan doğrulama (`jobboard.verify_posting`, `board.dogrula_ilanlar`).** Başvuru listesindeki
+  her ilan her run'da panonun kendi API'sine sorulur. Kapanan ilan defterde kapanır ve listeden
+  düşer; açık olanın başlığı, konumu ve yayın tarihi kaynağından yazılır (arama sonucunun
+  başlığı çoğu zaman ilanın değil sayfanın adıdır). Kapalı demek kanıt ister: ilanın ucu 404
+  döner ya da sonuna kadar okunan panoda ilan yoktur. Ağ hatası ve tanınmayan site "bilinmiyor"
+  sayılır, ilan listede kalır ve raporda doğrulanamadığı yazılır. Süre tavanı `ILAN_KONTROL_SN`.
 - **Görüşme hazırlığı (`prep.py`).** Son 14 günde görüşme daveti gelen her firma için bir kez
   hazırlık notu yazılır: şirket ne yapıyor, profilden uyan noktalar, sorulabilecekler,
   adayın sorabilecekleri. Girdi firmanın ana sayfası, profil ve gelen yanıtın özetidir.
@@ -525,6 +531,7 @@ scripts/audit_drafts.py   bekleyen taslak triyajı (mükerrer + içerik)
 scripts/repair.py         otomatik onarım + silme kararları (varsayılan KAPALI)
 scripts/autosend.py       veto pencereli gönderim (varsayılan KAPALI)
 scripts/report.py         günlük rapor + ATS digest + LinkedIn hedefleri
+scripts/report_html.py    günlük raporun HTML gövdesi (mailde okunan görünüm)
 scripts/tracking.py       gelen yanıtı okur ve sınıflar (görüşme, ret, otomatik, gürültü)
 scripts/board.py          takip panosu: firma durumu, bugünün işleri, ilan defteri
 scripts/prep.py           görüşme daveti gelince hazırlık notu (site + profil, uydurma denetimli)

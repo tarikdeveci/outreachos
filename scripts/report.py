@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import base64
 import json
+import re
+from datetime import date
 from email.message import EmailMessage
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
@@ -47,6 +49,12 @@ CORPORATE_QUERIES = [
     '"graduate software engineer") (remote OR Europe OR EMEA OR London OR Berlin) 2026',
 ]
 ATS_QUERIES = STARTUP_ATS_QUERIES + CORPORATE_QUERIES
+
+# Sorguların aradığı ama profildeki rol kategorilerinde adı geçmeyen aileler ("Founding Engineer",
+# "Solutions Engineer", "Yazılım Geliştirici"). İlanın gerçek başlığı panodan öğrenilince başlık
+# ya bir kategoriye ya bu aileye uymalı: arama "Account Executive" ilanını da getiriyor.
+TEKNIK_ROL = re.compile(r"(?<!\w)(?:engineer|developer|programmer|scientist|mühendis\w*|geliştirici|"
+                        r"yazılımcı)(?!\w)", re.I)
 
 
 # ATS host'larında tekil ilan değil, jenerik uç nokta olan path parçaları.
@@ -130,6 +138,22 @@ def gather_ats_digest(search_fn, role_ok, log, limit: int = 12) -> list[dict]:
     return out
 
 
+def ilan_yasi(yayin: str, today: str) -> int | None:
+    """İlan kaç gündür yayında; yayın tarihi bilinmiyorsa None."""
+    try:
+        return (date.fromisoformat(today) - date.fromisoformat(yayin)).days
+    except (TypeError, ValueError):
+        return None
+
+
+def ilan_notu(a: dict, today: str) -> str:
+    """İlanın tazelik notu: yayın tarihi ve yaşı, tarih yoksa doğrulanıp doğrulanmadığı."""
+    yas = ilan_yasi(a.get("yayin", ""), today)
+    if yas is not None:
+        return f"yayın {a['yayin']}, {yas} gündür açık"
+    return "bugün açık olduğu doğrulandı" if a.get("kontrol") == today else "açık olduğu doğrulanamadı"
+
+
 def linkedin_search_url(company: str, role: str) -> str:
     """Firma + rol için hazır LinkedIn kişi-arama linki. Kullanıcı tıklar, gerçek
     kişileri görür, kendisi bağlantı/mesaj atar — scraping veya otomatik mesaj YOK."""
@@ -207,10 +231,11 @@ def build_report_text(day, profile, drafted, ats, reply_notes, skipped, banner_l
     lines.append(f"== ATS/Portal üzerinden SEN başvuracaksın ({len(ats)}) ==")
     if ats:
         for a in ats:
-            lines.append(f"  • {'[YENİ] ' if a.get('yeni') else ''}{a['firma']} — {a['title']}")
+            lines.append(f"  • {'[YENİ] ' if a.get('yeni') else ''}{a['firma']}: {a['title']}")
+            lines.append(f"      {ilan_notu(a, day)}")
             lines.append(f"      {a['link']}")
     else:
-        lines.append("  (bugün uygun yeni ATS ilanı bulunamadı)")
+        lines.append("  (bugün açık olduğu doğrulanan yeni ATS ilanı yok)")
     lines.append("")
 
     lines.append(f"== Gmail'de hazır bekleyen taslaklar ({len(drafted)}) ==")
@@ -268,9 +293,11 @@ def own_address(token: str) -> str:
         return ""
 
 
-def send_self_report(to: str, subject: str, body: str, token: str) -> str | None:
+def send_self_report(to: str, subject: str, body: str, token: str,
+                     html: str | None = None) -> str | None:
     """Raporu KULLANICININ KENDİ adresine yollar. Bağlı hesabın adresiyle eşleşmezse
-    gönderim yapmaz (yanlışlıkla dışarı mail atmaya karşı güvenlik kilidi)."""
+    gönderim yapmaz (yanlışlıkla dışarı mail atmaya karşı güvenlik kilidi).
+    html verilirse mail iki biçimli gider: HTML göstermeyen istemci düz metni okur."""
     own = (own_address(token) or "").lower()
     if not own or to.lower() != own:
         print(f"    ! Rapor gönderilmedi: hedef ({to}) bağlı hesapla ({own or '?'}) eşleşmiyor.")
@@ -278,6 +305,8 @@ def send_self_report(to: str, subject: str, body: str, token: str) -> str | None
     msg = EmailMessage()
     msg["To"], msg["Subject"] = to, subject
     msg.set_content(body)
+    if html:
+        msg.add_alternative(html, subtype="html")
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
     data = json.dumps({"raw": raw}).encode()
     req = Request("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
@@ -355,5 +384,18 @@ if __name__ == "__main__":
                                   ("adresi ölü (bounce)", 1), ("diğer", 1),
                                   ("eleme adımı: uygun hedef değil", 1)], skip_breakdown(sk)
     assert "   2  sitede adres yok" in build_report_text("2026-10-04", {}, [], [], [], sk)
+
+    assert all(TEKNIK_ROL.search(t) for t in ("Founding Engineer", "Solutions Engineer", "Software Developer",
+                                              "Yazılım Geliştirici", "Yazılım Mühendisi", "Data Scientist"))
+    assert not any(TEKNIK_ROL.search(t) for t in ("Account Executive, Strategic", "Careers", "Engineering Manager",
+                                                  "Product Designer", "Search Jobs"))
+
+    # ilan notu: yayın tarihi ve yaşı; tarih yoksa doğrulanıp doğrulanmadığı
+    assert ilan_yasi("2026-08-26", "2026-10-07") == 42 and ilan_yasi("", "2026-10-07") is None
+    ilan = {"firma": "Acme", "title": "SE (Berlin)", "link": "https://x/1", "yayin": "2026-08-26"}
+    metin = build_report_text("2026-10-07", {}, [], [ilan], [], [])
+    assert "  • Acme: SE (Berlin)" in metin and "yayın 2026-08-26, 42 gündür açık" in metin
+    assert ilan_notu({"kontrol": "2026-10-07"}, "2026-10-07") == "bugün açık olduğu doğrulandı"
+    assert ilan_notu({}, "2026-10-07") == "açık olduğu doğrulanamadı"
 
     print("report self-test: OK")

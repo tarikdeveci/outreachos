@@ -70,7 +70,8 @@ outreachos/
 │   ├── repair.py           # ⚠️ taslakları onarır, onarılamayanı siler (varsayılan KAPALI)
 │   ├── autosend.py         # veto pencereli gönderim (varsayılan KAPALI)
 │   ├── report.py           # günlük rapor + ATS digest
-│   ├── jobboard.py         # adresi olmayan şirketin ilan panosu (Greenhouse, Lever, Ashby, Workable)
+│   ├── report_html.py      # günlük raporun HTML gövdesi (mailde okunan görünüm)
+│   ├── jobboard.py         # ilan panoları (Greenhouse, Lever, Ashby, Workable): ilan okuma, açık mı doğrulaması
 │   ├── tracking.py         # gelen yanıtı okur ve sınıflar (görüşme, ret, otomatik, gürültü)
 │   ├── board.py            # takip panosu: firma durumu, bugünün işleri, ilan defteri
 │   ├── prep.py             # görüşme daveti gelince hazırlık notu (site + profil, uydurma denetimli)
@@ -104,6 +105,7 @@ python scripts/numeric.py
 python scripts/repair.py
 python scripts/autosend.py
 python scripts/report.py
+python scripts/report_html.py
 python scripts/jobboard.py
 python scripts/tracking.py
 python scripts/board.py
@@ -245,6 +247,7 @@ python scripts/numeric.py
 python scripts/repair.py
 python scripts/autosend.py
 python scripts/report.py
+python scripts/report_html.py
 python scripts/jobboard.py
 python scripts/tracking.py
 python scripts/board.py
