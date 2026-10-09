@@ -206,8 +206,9 @@ Sistem bunu **ölçer ve kendini frenler** (matematiği ve gerekçesi: [ARCHITEC
 | Durum | Hard-bounce (son 30g) | Davranış |
 |---|---|---|
 | 🟢 İYİ | < %3 | normal |
-| 🟡 İZLEME | %3–6 | rapora uyarı + trend |
-| 🔴 KRİTİK | ≥ %6 | **yeni outreach durur** (takip/rapor devam eder) |
+| 🟡 İZLEME | %3 ile %6 arası | rapora uyarı + trend, gönderim tavanı yarıya iner |
+| 🔴 KRİTİK | %6 ile %12 arası | yavaş mod: gönderim tavanı dörtte bire iner |
+| ⛔ DURMA | ≥ %12 | **yeni outreach durur** (takip/rapor devam eder) |
 
 Ek fren: **bekleyen taslak > 12 ise yeni taslak üretilmez** — önce backlog boşalsın
 (biriken taslak hem boşuna LLM parası hem de bir gün topluca gönderilirse spam sinyali).

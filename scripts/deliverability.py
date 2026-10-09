@@ -4,7 +4,7 @@ Neden ayrı bir kat: mevcut sistem tek tek ölü adresi işaretliyordu ama TOPLA
 bounce oranı görmüyordu. Bir kaynak birden çok ölü/eski adres döktüğünde script körü
 körüne taslak üretmeye devam ediyor; asıl Gmail itibarını yakan da bu. Bu modül gerçek
 gönderilenler üzerinden oranı hesaplar, üç durumlu bir sağlık verir (İYİ/İZLEME/KRİTİK)
-ve kritikte o günkü yeni outreach'i durdurur.
+ve kritikte gönderimi yavaşlatır, oran kritik eşiğin iki katına çıkarsa durdurur.
 
 Ölçüm KAYNAĞI bilinçli olarak "gerçekten Gönderilenler'e düşen mailler":
   - payda: pencere içinde outreach adresine giden farklı alıcı (Gönderilenler'den).
@@ -143,19 +143,36 @@ def assess(*, gmail_search, token, contacted: dict, sent_events: list,
             "min_sent": min_sent, "note": ""}
 
 
+STOP_FACTOR = 2.0      # oran kritik eşiğin bu katına çıkarsa gönderim tamamen durur
+SLOW_DIVISOR = 4       # kritik ama durma altı: günlük gönderim tavanı bu sayıya bölünür
+
+
+def stopped(health: dict) -> bool:
+    """Gönderim tamamen durmalı mı: kritik VE oran kritik eşiğin STOP_FACTOR katı ya da üstü.
+
+    Kritikte doğrudan durmak kendini kilitliyordu: gönderim yokken pencereye yeni mail
+    girmiyor, eski gönderimler düştükçe payda küçülüyor ve oran KENDİLİĞİNDEN yükseliyor.
+    2026-10-08'de 4/57 ile duran sistem, hiçbir şey yapılmasa ~5 Kasım'a kadar kapalı
+    kalacaktı. Bu yüzden kritik bant yavaş moddur (temiz gönderim oranı düşürür); tam durma
+    yalnızca oranın gerçekten kötü olduğu, yavaş gönderimin de bounce yediği durumdadır."""
+    return (health.get("state") == "CRITICAL"
+            and health.get("bounce_rate", 0.0) >= STOP_FACTOR * health.get("critical", 0.06))
+
+
 def circuit(base_target: int, health: dict, pending_count: int, max_pending: int) -> tuple:
     """Guard'ın karar katı: (run_target, sebepler).
 
-    - KRİTİK bounce  → 0 (yeni outreach durdurulur, itibar koruması).
+    - bounce durma bandında (stopped) → 0 (yeni outreach durdurulur, itibar koruması).
     - bekleyen taslak > max_pending → 0 (önce backlog gönderilsin; ani hacim spike'ı önlenir).
-    İZLEME sayıyı otomatik kısmaz (sadece uyarı) — fren, bekleyen-taslak kuralı.
+    İZLEME ve KRİTİK taslak sayısını kısmaz: taslak itibara dokunmaz, gönderim hızını
+    autosend.gate ayarlar.
     """
     reasons: list[str] = []
     t = base_target
-    if health.get("state") == "CRITICAL":
+    if stopped(health):
         t = 0
-        reasons.append(f"hard-bounce %{health['bounce_rate'] * 100:.1f} ≥ kritik "
-                       f"%{health['critical'] * 100:.0f} — yeni outreach durduruldu")
+        reasons.append(f"hard-bounce %{health['bounce_rate'] * 100:.1f} ≥ durma eşiği "
+                       f"%{health['critical'] * STOP_FACTOR * 100:.0f}, yeni outreach durduruldu")
     if pending_count > max_pending:
         t = 0
         reasons.append(f"Gmail'de {pending_count} bekleyen outreach taslağı > {max_pending} "
@@ -182,13 +199,16 @@ def banner(health: dict, pending_count: int, max_pending: int,
              f"bekleyen taslak {pending_count}/{max_pending}"]
     if health.get("note"):
         lines.append(f"   not: {health['note']}")
-    if health.get("state") == "CRITICAL":
+    if stopped(health):
         lines.append("   ⛔ Yeni outreach DURDURULDU. Bounce takibi + ATS + rapor devam ediyor.")
-        lines.append("   yap: Gönderilenler'deki ölü adresleri ayıkla, birkaç gün yavaşla; "
-                     "oran düşünce otomatik devam eder.")
+        lines.append(f"   oran durma eşiğinin (%{health.get('critical', 0.06) * STOP_FACTOR * 100:.0f}) "
+                     "altına inince yavaş modla kendiliğinden devam eder.")
+    elif health.get("state") == "CRITICAL":
+        lines.append(f"   🐢 Yavaş mod: otomatik gönderim günlük tavanın 1/{SLOW_DIVISOR}'üne indi. "
+                     "Temiz gönderimler oranı düşürdükçe tam hıza kendiliğinden döner.")
     elif health.get("state") == "WATCH":
-        lines.append("   ⚠ Oran yükseliyor — yeni taslak açmadan önce bekleyenleri gönder/temizle.")
-    if pending_count > max_pending and health.get("state") != "CRITICAL":
+        lines.append("   ⚠ Oran yükseliyor: otomatik gönderim günlük tavanın yarısına indi.")
+    if pending_count > max_pending and not stopped(health):
         lines.append(f"   ⏸ Bekleyen taslak sınırı aşıldı ({pending_count}>{max_pending}) — "
                      "bugün yeni taslak açılmadı.")
     if run_target < base_target:
@@ -263,7 +283,14 @@ if __name__ == "__main__":
     assert circuit(12, hw, 3, 12)[0] == 12         # WATCH sayıyı kısmaz, sadece uyarır
 
     rt, why = circuit(12, h, pending_count=3, max_pending=12)
-    assert rt == 0 and why, (rt, why)
+    assert rt == 0 and why, (rt, why)              # %12.5 ≥ durma eşiği %12
+    assert stopped(h)
+    # Kritik ama durma altı (2026-10-09: 4/57 = %7.0): yavaş mod, taslak üretimi sürer
+    h_slow = {"state": "CRITICAL", "bounce_rate": 4 / 57, "critical": 0.06}
+    assert not stopped(h_slow)
+    assert circuit(20, h_slow, 3, 50) == (20, [])
+    assert any("Yavaş mod" in x for x in banner(h_slow, 3, 50, 20, 20))
+    assert not any("DURDURULDU" in x for x in banner(h_slow, 3, 50, 20, 20))
     rt2, why2 = circuit(12, {"state": "OK", "bounce_rate": 0.0}, pending_count=20, max_pending=12)
     assert rt2 == 0 and why2, (rt2, why2)          # backlog freni
     rt3, _ = circuit(12, {"state": "OK", "bounce_rate": 0.0}, pending_count=3, max_pending=12)

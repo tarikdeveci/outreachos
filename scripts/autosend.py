@@ -15,7 +15,8 @@ geçmişti. Körlemesine gönderim, itibara bounce'tan çok daha pahalıya mal o
 Bounce koruması (kullanıcının asıl derdi):
   1. Gönderimden HEMEN ÖNCE MX yeniden doğrulanır — adres kuyrukta beklerken ölmüş olabilir.
   2. Sert günlük tavan (AUTO_SEND_CAP, varsayılan 5) — hacim sıçraması spam sinyalidir.
-  3. hard-bounce KRİTİK ise hiç gönderilmez; İZLEME'de tavan yarıya iner.
+  3. İZLEME'de tavan yarıya, KRİTİK'te dörtte bire iner; oran kritik eşiğin iki katına
+     çıkarsa hiç gönderilmez (deliverability.stopped).
   4. Yalnızca audit'in ✅GUVENLI dediği (mükerrer değil + içerik doğrulanmış) taslaklar.
 
 Güvenlik: bu kat AUTO_SEND=1 olmadan HİÇBİR ŞEY göndermez (varsayılan "0"). Kapalıyken
@@ -26,6 +27,8 @@ Saf çekirdek (gate/pick/kuyruk mantığı) ağsız; dosya sonundaki __main__ ke
 `python scripts/autosend.py`
 """
 from __future__ import annotations
+
+import deliverability
 
 QUEUE_KEY = "autosend_queue"
 SENT_KEY = "autosend_sent"
@@ -54,7 +57,8 @@ def pick(audit_results: list, cap: int, exclude_ids: set | None = None) -> list:
 def gate(health: dict, enabled: bool, cap: int) -> tuple:
     """(izin, efektif_tavan, sebepler) — bugün kaç mail gönderilebilir.
 
-    KRİTİK bounce  → 0 (fren; deliverability.circuit ile aynı mantık).
+    Durma bandı    → 0 (oran kritik eşiğin iki katı; deliverability.stopped).
+    KRİTİK         → tavan dörtte bire iner: temiz gönderim oranı düşürsün diye durmaz.
     İZLEME         → tavan yarıya iner (yavaşla ama durma).
     Kapalıysa      → 0 ama sebep 'kapalı' (rapor bunu 'gönderilebilirdi' diye gösterir).
     """
@@ -62,9 +66,12 @@ def gate(health: dict, enabled: bool, cap: int) -> tuple:
     if not enabled:
         return False, 0, ["AUTO_SEND kapalı (varsayılan) — kuyruk sadece gösteriliyor"]
     state = health.get("state")
+    oran = health.get("bounce_rate", 0) * 100
+    if deliverability.stopped(health):
+        return False, 0, [f"hard-bounce %{oran:.1f} durma eşiğinde, otomatik gönderim durduruldu"]
     if state == "CRITICAL":
-        return False, 0, [f"hard-bounce %{health.get('bounce_rate', 0) * 100:.1f} kritik — "
-                          "otomatik gönderim durduruldu"]
+        cap = max(1, cap // deliverability.SLOW_DIVISOR)
+        return True, cap, [f"hard-bounce %{oran:.1f} kritik, yavaş mod: günlük tavan {cap}"]
     if state == "WATCH":
         cap = max(1, cap // 2)
         reasons.append(f"bounce izleme seviyesinde — günlük tavan {cap}'e indirildi")
@@ -218,8 +225,11 @@ if __name__ == "__main__":
     # gate
     ok, cap, why = gate({"state": "OK"}, enabled=False, cap=5)
     assert not ok and cap == 0 and "kapalı" in why[0]
-    ok, cap, why = gate({"state": "CRITICAL", "bounce_rate": 0.09}, enabled=True, cap=5)
-    assert not ok and cap == 0 and "kritik" in why[0]
+    ok, cap, why = gate({"state": "CRITICAL", "bounce_rate": 0.13, "critical": 0.06}, enabled=True, cap=5)
+    assert not ok and cap == 0 and "durma" in why[0]
+    ok, cap, why = gate({"state": "CRITICAL", "bounce_rate": 0.07, "critical": 0.06}, enabled=True, cap=20)
+    assert ok and cap == 5 and "yavaş mod" in why[0], (ok, cap, why)
+    assert gate({"state": "CRITICAL", "bounce_rate": 0.07, "critical": 0.06}, True, 2)[1] == 1
     ok, cap, why = gate({"state": "WATCH", "bounce_rate": 0.04}, enabled=True, cap=5)
     assert ok and cap == 2 and why, (ok, cap, why)
     ok, cap, why = gate({"state": "OK"}, enabled=True, cap=5)

@@ -15,8 +15,11 @@ from __future__ import annotations
 import json
 import re
 
-NUM_RE = re.compile(r"\d[\d.,]*(?:[ \t]?(?:%|k\b\+?|m\b\+?|(?:bin|mil(?:yon|lion)|milyar|billion)"
-                    r"[a-zçğıöşü']*))?", re.I)
+# Yüzde işareti başta da olabilir: profil Türkçe ('%80'), İngilizce mail '80%' yazar. Önek
+# okunmadığında profildeki '%80' düz 80 sayılıyor, maildeki '80%' "profilde yok" deniyordu:
+# 2026-10-09'da bekleyen 86 içerik hatasının 71'i yalnızca buydu ve gönderim kuyruğu kurudu.
+NUM_RE = re.compile(r"(?:%[ \t]?)?\d[\d.,]*(?:[ \t]?(?:%|k\b\+?|m\b\+?|(?:bin|mil(?:yon|lion)|"
+                    r"milyar|billion)[a-zçğıöşü']*))?", re.I)
 NUM_WHITELIST = {"1", "2", "3", "4", "5", "2022", "2023", "2024", "2025", "2026"}
 URL_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
 _SAYI = re.compile(r"([\d.,]*\d)\s*(k|m|bin|mil(?:yon|lion)|milyar|billion)?[a-zçğıöşü']*\+?(%)?$")
@@ -40,10 +43,13 @@ def value(tok: str) -> tuple | None:
 
     '1,5' ve '4.9' ondalıktır, '100,000' ve '2.026' binliktir (ayraçtan sonra tam üç hane).
     Düz = ayraçsız ve eksiz tam sayı: yalnızca bu biçim beyaz listeye ve yıl korumasına girer."""
-    m = _SAYI.match(tok.strip().lower().replace(" ", "").rstrip(".,"))
+    t = tok.strip().lower().replace(" ", "").rstrip(".,")
+    onek = t.startswith("%")
+    m = _SAYI.match(t[1:] if onek else t)
     if not m:
         return None
     n, ek, yuzde = m.groups()
+    yuzde = yuzde or ("%" if onek else "")
     if re.fullmatch(r"\d{1,3}([.,])\d{3}(?:\1\d{3})*", n):
         deger, ayracli = float(re.sub(r"[.,]", "", n)), True
     elif re.fullmatch(r"\d+[.,]\d+", n):
@@ -131,4 +137,11 @@ if __name__ == "__main__":
     assert foreign_numbers("12 ülkede 100,000 kullanıcı, skor 0.56", prof, "acme.io") == ["12", "100,000"]
     assert numeric_check("12 ülkede 100,000 kullanıcı", prof, "acme.io 12 100,000") is None
     assert value("1.2.3") is None and value("%") is None
+    # Yüzde iki yazımla da aynı değer: profil '%80', mail '80%' ya da '80 %'
+    tr = {"p": "TTS maliyetini %80 düşürdü, API süresini % 25 kısalttı"}
+    for metin in ("cut TTS cost by 80%", "by 80 %", "%80 düşürdüm", "25% faster"):
+        assert numeric_check(metin, tr) is None, metin
+    assert numeric_check("cut cost by 90%", tr) == "profilde olmayan sayı: '90%'"
+    assert numeric_check("80 users", tr) is not None          # yüzde, düz sayıya izin vermez
+    assert numeric_check("80% more", {"p": "80 kullanıcı"}) is not None
     print("numeric self-test OK")

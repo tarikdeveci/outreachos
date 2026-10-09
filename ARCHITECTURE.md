@@ -267,7 +267,12 @@ spam'e düşer, artık iyi yazılmış mailler bile ulaşmaz.**
 |---|---|---|
 | 🟢 İYİ | < %3 | normal |
 | 🟡 İZLEME | %3–6 | rapora uyarı + trend; otomatik gönderim tavanı yarıya iner |
-| 🔴 KRİTİK | ≥ %6 | **yeni outreach durur** (bounce takibi, ATS listesi, rapor devam eder) |
+| 🔴 KRİTİK | %6 ile %12 arası | yavaş mod: otomatik gönderim tavanı dörtte bire iner |
+| ⛔ DURMA | ≥ %12 | **yeni outreach durur** (bounce takibi, ATS listesi, rapor devam eder) |
+
+Kritikte doğrudan durmak kendini kilitliyordu: gönderim yokken pencereye yeni mail girmez,
+eski gönderimler düştükçe payda küçülür ve oran kendiliğinden yükselir. Yavaş modda temiz
+gönderimler oranı düşürür; durma yalnızca yavaş gönderimin de bounce yediği durumdadır.
 
 Ek fren: **bekleyen taslak > 12 ise yeni taslak üretilmez.** Sebebi ilk bakışta belli değil:
 biriken taslak, sistemin ürettiği ama insanın onaylamadığı iştir. Birikmeye devam ederse
