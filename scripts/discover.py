@@ -46,6 +46,7 @@ from urllib.request import Request, urlopen
 
 import deliverability
 import audit_drafts
+import funding
 import autosend
 import board
 import jobboard
@@ -419,23 +420,48 @@ def _band(raw: str) -> tuple:
 SCALEUP_BAND = _band(os.environ.get("SCALEUP_BAND", "20,300"))
 
 
-def candidate_priority(domain: str, c: dict, band: tuple = SCALEUP_BAND) -> tuple:
+# Yatırımı bu kadar günden yeni olan şirket sıranın en önüne geçer (yatırım haberi, YC dönemi).
+FON_TAZE_GUN = int(os.environ.get("FON_TAZE_GUN", "365"))
+BUYUK_TUR_MUSD = 200        # bundan büyük tur alan şirket scaleup değil, büyük şirket sayılır
+TR_ULKE = {"TR", "Turkey", "Türkiye", "Turkiye"}
+
+
+def fon_yasi(c: dict, bugun: date | None = None) -> int | None:
+    """Son yatırımın üzerinden geçen gün; tarihi bilinmiyorsa None."""
+    try:
+        return ((bugun or date.today()) - date.fromisoformat(str(c.get("fon_tarihi"))[:10])).days
+    except ValueError:
+        return None
+
+
+def candidate_priority(domain: str, c: dict, band: tuple = SCALEUP_BAND,
+                       bugun: date | None = None) -> tuple:
     """Aday işleme sırası (küçük anahtar önce işlenir). Kimse elenmez, yalnızca sıra değişir.
 
-    Önce şu an işe alanlar. Onların içinde: ekibi hedef banda (scaleup) düşenler, sonra
-    bandın altındaki ekipler (banda yakın olan önce), sonra bandın biraz üstü, sonra ekibi
-    bilinmeyenler, en sonda çok büyük şirketler: onların genel adresine giden soğuk mail
-    okunmaz, ilanları ATS özetinden gelir. Eskiden en küçük ekip en öndeydi; bir ve iki
-    kişilik şirketler sırayı dolduruyor, büyüyen şirketlere sıra gelmiyordu.
+    1. Yatırım tazeliği: son FON_TAZE_GUN içinde tur kapatmış olanlar önce (yatırım haberi ya
+       da YC dönemi). Yeni parası olan şirket büyümek zorundadır, kurucusu hızlı iş çıkaracak
+       insan arar. Sonra şu an işe alanlar ve büyüme listesinden gelenler, en son geri kalan.
+    2. Çalışılabilirlik: yalnızca yerinde çalıştığı bilinen yabancı şirket (YC'de "Remote"
+       işareti yok) geriye düşer; vize ister. Bölge önceliği yoktur: remote ya da Türkiye'den
+       çalışılabilen her yer aynı sıradadır.
+    3. Ekip: hedef banda (scaleup) düşenler, bandın altı, bandın biraz üstü, bilinmeyenler,
+       en sonda çok büyükler (genel adrese giden soğuk mail okunmaz, ilanları ATS özetinden gelir).
 
-    `olcek` işaretli aday (SCALEUP_DIRECTORIES) işe alan sayılır. Ekibi bilinmiyorsa banda
-    alan adından türeyen sabit bir yerle yayılır: ekibi bilinen adayların arasına karışır,
-    hepsi birden sıranın başına ya da sonuna yığılmaz."""
+    Ekibi bilinmeyen ama büyüme listesinden ya da yatırım haberinden gelen aday banda alan
+    adından türeyen sabit bir yerle yayılır: hepsi birden sıranın başına yığılmaz. Turu
+    BUYUK_TUR_MUSD'den büyükse büyük şirket sayılır."""
     lo, hi = band
     ekip = c.get("ekip")
     olcek = bool(c.get("olcek"))
+    yas = fon_yasi(c, bugun)
+    taze = yas is not None and 0 <= yas <= FON_TAZE_GUN
     if not isinstance(ekip, int) or ekip <= 0:
-        kademe, ic = (0, lo + zlib.crc32(domain.encode()) % (hi - lo + 1)) if olcek else (3, 0)
+        if (c.get("fon_musd") or 0) > BUYUK_TUR_MUSD:
+            kademe, ic = 2, 0
+        elif olcek or taze:
+            kademe, ic = 0, lo + zlib.crc32(domain.encode()) % (hi - lo + 1)
+        else:
+            kademe, ic = 3, 0
     elif lo <= ekip <= hi:
         kademe, ic = 0, ekip
     elif ekip < lo:
@@ -444,7 +470,10 @@ def candidate_priority(domain: str, c: dict, band: tuple = SCALEUP_BAND) -> tupl
         kademe, ic = 2, ekip
     else:
         kademe, ic = 4, ekip
-    return (0 if c.get("ise_aliyor") or olcek else 1, kademe, ic, domain)
+    fon = 0 if taze else 1 if c.get("ise_aliyor") or olcek else 2
+    yerinde = (c.get("remote") is False and c.get("ulke") not in TR_ULKE
+               and not domain.endswith(".tr"))
+    return (fon, int(yerinde), kademe, ic, domain)
 
 
 # ---------------------------------------------------------------- e-posta doğrulama
@@ -564,10 +593,61 @@ def choose_address(seen: dict) -> tuple[str | None, str]:
     return None, f"yalnızca rol kutusu ya da rolü belirsiz adres bulundu ({sorted(seen)[0]})"
 
 
-def find_verified_email(domain: str, panolar: list | None = None) -> tuple[str | None, str]:
+# Kurucuya yazmak için: sitede gerçek bir kişi adresi (yanında adı soyadı yazan) şirketin adres
+# kalıbını gösteriyorsa, adı doğrulanmış kurucunun adresi o kalıptan kurulur. Kalıp kanıtsız
+# tahmin edilmez; genel kutu (info@, hello@) hiçbir zaman kurulmaz. KALIP_ADRES=0 kapatır.
+KALIP_ADRES = os.environ.get("KALIP_ADRES", "1") != "0"
+ADRES_KALIPLARI = {"ad.soyad": "{f}.{l}", "adsoyad": "{f}{l}", "a.soyad": "{i}.{l}",
+                   "asoyad": "{i}{l}", "ad_soyad": "{f}_{l}", "ad-soyad": "{f}-{l}",
+                   "ad": "{f}", "soyad": "{l}"}
+_AD_SOYAD = re.compile(r"\b([A-ZÇĞİÖŞÜ][a-zçğıöşüé]+)\s+([A-ZÇĞİÖŞÜ][a-zçğıöşüé]+)")
+
+
+def _ad_parcalari(ad: str) -> tuple | None:
+    p = [x for x in re.split(r"[\s'’-]+", funding.ascii_(ad).lower()) if x.isalpha()]
+    return (p[0], p[-1]) if len(p) >= 2 else None
+
+
+def adres_kalibi(seen: dict) -> tuple | None:
+    """(kalıp, kanıt adresi): sitedeki bir kişi adresi, yanında yazan addan bilinen bir kalıpla
+    türüyorsa (ör. "Ada Lovelace" ve ada.lovelace@). Kanıt yoksa None."""
+    yasak = ROLE_PREFIXES | set(GENERIC_PREFIXES)
+    for e in sorted(seen):
+        yerel = e.split("@")[0].lower()
+        if not KISI_ADRESI.match(yerel) or set(re.split(r"[._-]", yerel)) & yasak:
+            continue
+        for ad, soyad in _AD_SOYAD.findall(seen[e] or ""):
+            f, l = _ad_parcalari(f"{ad} {soyad}") or ("", "")
+            for kalip, sablon in ADRES_KALIPLARI.items():
+                if f and l and f != l and sablon.format(f=f, l=l, i=f[0]) == yerel:
+                    return kalip, e
+    return None
+
+
+def kalip_adresi(kalip: str, ad: str, alan: str) -> str | None:
+    p = _ad_parcalari(ad)
+    if not p or kalip not in ADRES_KALIPLARI:
+        return None
+    return ADRES_KALIPLARI[kalip].format(f=p[0], l=p[1], i=p[0][0]) + "@" + alan
+
+
+def _kisi_adi(email: str, ctx: str) -> str | None:
+    """Adresin yanında yazan ad soyad (ada@ ve "Ada Lovelace")."""
+    ilk = re.split(r"[._-]", email.split("@")[0])[0].capitalize()
+    m = re.search(rf"\b({re.escape(ilk)}\s+[A-ZÇĞİÖŞÜ][\w'’-]+)", ctx or "")
+    return m.group(1) if m else None
+
+
+def find_verified_email(domain: str, panolar: list | None = None,
+                        kisi: dict | None = None) -> tuple[str | None, str]:
     """(email, kanıt) — adres şirketin kendi sayfasında geçmiyorsa None döner.
     ASLA info@<domain> gibi bir tahmin üretmez. `panolar` verilirse okunan sayfalarda
-    görülen ilk ATS panosu (tür, ad) oraya eklenir: adres çıkmazsa başvuru yolu odur."""
+    görülen ilk ATS panosu (tür, ad) oraya eklenir: adres çıkmazsa başvuru yolu odur.
+
+    `kisi` verilirse okunan sayfalardaki kurucu/CTO adayları ("adaylar": [(ad, metin, kaynak)]),
+    adres kalıbı ("kalip") ve MX sonucu ("mx") oraya yazılır. Sitede yazılacak kutu olmasa da
+    kalıp ve MX varsa çağıran, adı doğrulanmış kurucunun adresini kurabilir."""
+    import drafting                                     # noqa: E402  (page_text)
     # Kısa timeout bilinçli: ölü/yavaş sitelerde 10 yol × 20s = tek şirket için
     # 200 saniye ediyordu ve run'ı zaman aşımına sokuyordu. Gerçekten çalışan bir
     # site 8 saniyede yanıt verir; vermiyorsa zaten sıradaki adaya geçmek daha verimli.
@@ -591,6 +671,11 @@ def find_verified_email(domain: str, panolar: list | None = None) -> tuple[str |
             alan = e.split("@")[-1].lower()
             if alan == domain.lower() or alan.endswith("." + domain.lower()):   # labs.io ≠ acmelabs.io
                 seen.setdefault(e, "" if p in yasal else _address_context(html, e))
+        if kisi is not None and p not in yasal:
+            adaylar = kisi.setdefault("adaylar", [])
+            for ad, ctx in funding.kurucu_adlari(drafting.page_text(html, 40000)):
+                if len(adaylar) < 4 and ad not in (a[0] for a in adaylar):
+                    adaylar.append((ad, ctx, "şirket sitesi"))
 
     # Yazılabilir bir adres çıkana kadar sürer: ilk sayfada yalnızca support@ görüp durmak,
     # iki sayfa ötedeki hello@ kutusunu kaçırıyordu.
@@ -608,10 +693,19 @@ def find_verified_email(domain: str, panolar: list | None = None) -> tuple[str |
             if p not in okunan:
                 topla(p, 6)
     email, tur = choose_address(seen)
-    if not email:
+    if kisi is not None:
+        ad = _kisi_adi(email, seen[email]) if email and "isimli" in tur else None
+        if ad:
+            kisi.setdefault("adaylar", []).insert(0, (ad, seen[email][-300:], "sitede adresiyle"))
+        kisi["kalip"] = adres_kalibi(seen) if KALIP_ADRES else None
+    if not email and not (kisi or {}).get("kalip"):
         return None, tur
     if not mx_ok(domain):
-        return None, f"{email} bulundu ama {domain} MX kaydı yok (ölü domain)"
+        return None, f"{email or 'kişi adresi'} bulundu ama {domain} MX kaydı yok (ölü domain)"
+    if kisi is not None:
+        kisi["mx"] = True
+    if not email:
+        return None, f"sitede yazılacak kutu yok, kişi adresi kalıbı var ({kisi['kalip'][1]})"
     return email, f"sitede birebir geçiyor ({tur}) + MX doğrulandı"
 
 
@@ -669,12 +763,37 @@ def harvest_links(url: str, label: str, cands: dict[str, dict], cap: int = 150,
     return added
 
 
-def gather_candidates(queries: list[str], log: list[str]) -> dict[str, dict]:
-    """Aday havuzu iki kaynaktan gelir:
+FON_DENEME_GUN = 30         # işlenip elenen yatırım haberi adayı bu kadar gün yeniden denenmez
+
+
+def fon_haberleri(state: dict, log: list[str], bugun: date | None = None,
+                  get_fn=None) -> dict[str, dict]:
+    """Yatırım haberlerinden gelen adaylar. Kayıt state'te tutulur ("fon_haberleri"): akışlar
+    yalnızca son birkaç haftayı gösterir, kayıt bir yıl boyunca adayı elde tutar. Son
+    FON_DENEME_GUN içinde denenip elenen aday dönmez (adresi yoktu, elendi): her gün aynı
+    siteyi baştan okumasın."""
+    bugun = bugun or date.today()
+    fk = state.setdefault("fon_haberleri", {})
+    okunan = {k: v for k, v in fk.get("okunan", {}).items()
+              if (bugun - date.fromisoformat(v)).days <= 60}
+    get_fn = get_fn or (lambda u: _get(u, timeout=15, limit=2_000_000))
+    yeni = funding.haber_adaylari(get_fn, domain_of, is_noise, bugun, okunan, log)
+    fk["okunan"] = okunan
+    fk["adaylar"] = funding.birlestir(fk.get("adaylar", {}), yeni, bugun)
+    return {d: c for d, c in fk["adaylar"].items()
+            if not c.get("denendi")
+            or (bugun - date.fromisoformat(c["denendi"])).days > FON_DENEME_GUN}
+
+
+def gather_candidates(queries: list[str], log: list[str],
+                      state: dict | None = None) -> dict[str, dict]:
+    """Aday havuzu üç kaynaktan gelir:
 
     1. Portföy/dizin sayfaları (birincil) — bunlar birebir şirket listesi olduğu
        için verim çok yüksek.
-    2. Arama sonuçları (ikincil) — çoğu zaman "startuplar hakkında yazı" döndürüp
+    2. Yatırım haberleri (`state` verilirse): son aylarda tur kapatmış şirketler; sıranın
+       başına geçerler (candidate_priority).
+    3. Arama sonuçları (ikincil) — çoğu zaman "startuplar hakkında yazı" döndürüp
        toplayıcı/haber sitesi getiriyor, o yüzden destek amaçlı.
     """
     cands: dict[str, dict] = {}
@@ -694,13 +813,22 @@ def gather_candidates(queries: list[str], log: list[str]) -> dict[str, dict]:
                                   "baslik": "", "ozet": x.get("aciklama", ""),
                                   "ise_aliyor": x.get("ise_aliyor", False),
                                   "ekip": x.get("ekip"), "ulke": x.get("ulke", "??"),
-                                  "olcek": bool(x.get("olcek"))}
+                                  "olcek": bool(x.get("olcek")),
+                                  **{k: x[k] for k in ("fon_tarihi", "remote") if k in x}}
             log.append(f"**Havuz** (`candidate_pool.json`, güncellendi "
                        f"{data.get('guncellendi','?')}): {len(cands)} domain\n")
         except (json.JSONDecodeError, OSError) as e:
             log.append(f"**Havuz okunamadı:** {e}\n")
     else:
         log.append("**Havuz yok** — `python scripts/refresh_pool.py` ile oluştur.\n")
+
+    if state is not None:
+        log.append("**Yatırım haberleri:**\n")
+        haber = fon_haberleri(state, log)
+        for dom, x in haber.items():
+            # Havuzdaki kayıt (ekip, ülke, remote) korunur; haber tarih, tur ve kurucu ekler.
+            cands[dom] = {**cands.get(dom, {}), **x}
+        log.append(f"  yatırım haberinden işlenecek aday: {len(haber)}\n")
 
     # 2) Dizinleri canlı çekmeyi yine de dene (CI'dan çoğu engelli, yerelde çalışır)
     log.append("**Dizin sayfaları (canlı):**\n")
@@ -1577,7 +1705,7 @@ def main() -> int:
 
     log: list[str] = []
     log.append("## Taranan Kaynaklar ve Verim\n")
-    cands = gather_candidates(todays_queries(), log)
+    cands = gather_candidates(todays_queries(), log, state)
     log.append(f"\n**Toplam aday domain: {len(cands)}**\n")
 
     drafted, skipped = [], []
@@ -1664,8 +1792,17 @@ def main() -> int:
         site_text = drafting.page_text(raw.decode("utf-8", errors="replace"))
 
         panolar: list = []
-        email, kanit = find_verified_email(d, panolar)
-        if not email:
+        kisi: dict = {}
+        email, kanit = find_verified_email(d, panolar, kisi)
+        # Kurucu adayları: sitede unvanıyla geçenler, sonra yatırım haberinde geçenler. Ad,
+        # geçtiği metinle birlikte modele gider; yalnızca model "şirketin kendi kurucusu/CTO'su"
+        # derse kullanılır (haberde yatırımcının CEO'su da unvanıyla geçebiliyor).
+        kisiler = list(kisi.get("adaylar", []))
+        for k in c.get("kurucular", []):
+            if k[0] not in (a[0] for a in kisiler):
+                kisiler.append((k[0], k[1], "yatırım haberi"))
+        kalip = kisi.get("kalip") if kisi.get("mx") else None
+        if not email and not (kalip and kisiler):
             neden = ats_yonlendir(name, c, site_text, panolar) or kanit
             with lock:
                 skipped.append((d, neden))
@@ -1673,12 +1810,25 @@ def main() -> int:
         if dur.is_set():                       # LLM'e girmeden son kontrol
             return
 
-        verdict, neden = drafting.judge_draft_verify(c, site_text, profile, today)
+        verdict, neden = drafting.judge_draft_verify({**c, "kisiler": kisiler[:4]}, site_text,
+                                                     profile, today)
         if not verdict:
             with lock:
                 skipped.append((d, neden))
             if "HALÜSİNASYON" in neden:
                 print(f"  x {d} → taslak reddedildi ({neden[:110]})")
+            return
+        hitap = str(verdict.get("hitap_adi") or "") if verdict.get("hitap_gecerli") else ""
+        if hitap not in (a[0] for a in kisiler):
+            hitap = ""                             # model listede olmayan bir ad yazdıysa kullanılmaz
+        if hitap and kalip and "isimli" not in kanit:
+            kurulan = kalip_adresi(kalip[0], hitap, kalip[1].split("@")[1])
+            if kurulan:
+                email, kanit = kurulan, (f"kurucu adresi, sitedeki {kalip[1]} kalıbından "
+                                         f"({kalip[0]}) + MX doğrulandı")
+        if not email:
+            with lock:
+                skipped.append((d, "sitede kutu yok, kurucu adı doğrulanamadı (adres kurulmadı)"))
             return
 
         decision = pipeline.decide({"firma": name, "title": "spekülatif outreach",
@@ -1715,11 +1865,14 @@ def main() -> int:
                             "hedef_kisiler": hedef[:3],
                             "linkedin_mesaji": verdict.get("linkedin_mesaji", ""),
                             "sayi_izni": verdict.get("sayi_izni", ""),
-                            "dil": verdict.get("dil", "")})
+                            "dil": verdict.get("dil", ""), "hitap": hitap,
+                            "fon": c.get("haber", "")})
             n = len(drafted)
         cv = verdict.get("cv") if "\nCV: " in verdict.get("govde", "") else "yok"
+        kime = ("kişi" if "isimli" in kanit or "kalıbından" in kanit
+                else "genel kutu, " + hitap if hitap else "genel")
         print(f"  + {d} → {email} ({'taslak ' + str(draft_id) if draft_id else 'DRY_RUN'}) "
-              f"[{n}/{run_target}] cv:{cv} kime:{'kişi' if 'isimli' in kanit else 'genel'}")
+              f"[{n}/{run_target}] cv:{cv} kime:{kime}")
         if n >= run_target:
             dur.set()
 
@@ -1744,6 +1897,12 @@ def main() -> int:
                           f"(kalan adaylar yarın işlenecek)")
                     skipped.append(("(kalanlar)", "zaman bütçesi doldu"))
                     dur.set()
+
+    # Elenen yatırım haberi adayı bir süre yeniden denenmez (zaman bütçesine kalanlar hariç).
+    fk = state.get("fon_haberleri", {}).get("adaylar", {})
+    for d, neden in skipped:
+        if d in fk and "bütçe" not in neden and "yarın" not in neden and "kredi" not in neden:
+            fk[d]["denendi"] = today
 
     # DRY_RUN state'i KİRLETMEMELİ: taslak oluşturulmadığı halde şirketi
     # "iletişime geçildi" diye işaretlersek, gerçek run onu atlar ve o şirkete
@@ -1774,7 +1933,9 @@ def main() -> int:
             "date": today, "channel": "gmail_draft_speculative", "email": x["email"],
             "draft_id": x["draft_id"], "last_reply_seen": None,
             **({"sayi_izni": x["sayi_izni"]} if x.get("sayi_izni") else {}),
-            **({"dil": x["dil"]} if x.get("dil") else {})}
+            **({"dil": x["dil"]} if x.get("dil") else {}),
+            **({"hitap": x["hitap"]} if x.get("hitap") else {}),
+            **({"fon": x["fon"]} if x.get("fon") else {})}
     state["last_run_date"] = today
     state["total_drafts_created_lifetime"] = state.get("total_drafts_created_lifetime", 0) + len(drafted)
     state["daily_caps_note"] = (f"{today} hibrit run: {len(cands)} aday domain, "
@@ -2129,8 +2290,51 @@ def _self_test() -> int:
     # fonlu.io: ekibi bilinmiyor ama büyüme listesinden geldi → bantta, küçük ekiplerden önce
     assert sira.index("fonlu.io") < 2 and sira[2:] == [
         "orta.io", "tek.io", "bilinmez.io", "dev.io", "almiyor.io"], sira
-    assert candidate_priority("fonlu.io", {"olcek": True})[:2] == (0, 0)
-    assert 20 <= candidate_priority("fonlu.io", {"olcek": True}, (20, 300))[2] <= 300
+    assert candidate_priority("fonlu.io", {"olcek": True})[:3] == (1, 0, 0)
+    assert 20 <= candidate_priority("fonlu.io", {"olcek": True}, (20, 300))[3] <= 300
+    # yatırım tazeliği en önde; yerinde çalışan yabancı şirket aynı kademede geriye düşer;
+    # Türkiye ya da remote fark etmez; dev tur büyük şirket sayılır
+    bugun_ = date(2026, 10, 13)
+    havuz2_ = {"yeni.io": {"fon_tarihi": "2026-09-01"},
+               "yeniyerinde.com": {"fon_tarihi": "2026-09-01", "remote": False, "ulke": "USA"},
+               "yenitr.com": {"fon_tarihi": "2026-09-01", "remote": False, "ulke": "Turkey"},
+               "dev.com": {"fon_tarihi": "2026-10-01", "fon_musd": 1850},
+               "eskifon.io": {"fon_tarihi": "2024-01-01", "ise_aliyor": True, "ekip": 50},
+               "hicbiri.io": {"ekip": 50}}
+    sira2 = [d for d, _ in sorted(havuz2_.items(), key=lambda kv: candidate_priority(
+        kv[0], kv[1], (20, 300), bugun_))]
+    assert set(sira2[:2]) == {"yeni.io", "yenitr.com"} and sira2[2:] == [
+        "dev.com", "yeniyerinde.com", "eskifon.io", "hicbiri.io"], sira2
+    assert fon_yasi({"fon_tarihi": "2026-10-03"}, bugun_) == 10 and fon_yasi({}) is None
+    # adres kalıbı yalnızca sitedeki gerçek bir kişi adresinden çıkar
+    assert adres_kalibi({"ada.lovelace@acme.io": "Ada Lovelace, Head of Sales"}) == (
+        "ad.soyad", "ada.lovelace@acme.io")
+    assert adres_kalibi({"alovelace@acme.io": "bize yazın: Ada Lovelace"})[0] == "asoyad"
+    assert adres_kalibi({"ada@acme.io": "Ada Lovelace"})[0] == "ad"
+    assert adres_kalibi({"ada@acme.io": ""}) is None                       # ad yazmıyor: kanıt yok
+    assert adres_kalibi({"info@acme.io": "Ada Lovelace"}) is None          # genel kutu kalıp değil
+    assert adres_kalibi({"sales@acme.io": "Ada Lovelace"}) is None
+    assert kalip_adresi("ad.soyad", "Çağrı Öztürk", "acme.io") == "cagri.ozturk@acme.io"
+    assert kalip_adresi("asoyad", "Jean-Luc Picard", "acme.io") == "jpicard@acme.io"
+    assert kalip_adresi("ad", "Madonna", "acme.io") is None and kalip_adresi("x", "A B", "c") is None
+    # yatırım haberi kaydı: state'te birikir, denenip elenen 30 gün dönmez, eski tur düşer
+    rss_ = (b"<rss><item><title>Obsero raises \xe2\x82\xac1 million</title><link>https://n.test/a</link>"
+            b"<pubDate>Tue, 13 Oct 2026 08:00:00 +0000</pubDate><description>&lt;a href="
+            b"&quot;https://obsero.ai/&quot;&gt;x&lt;/a&gt;</description></item></rss>")
+    st_ = {"fon_haberleri": {"adaylar": {
+        "denenmis.io": {"fon_tarihi": "2026-09-01", "denendi": "2026-10-01"},
+        "cokeski.io": {"fon_tarihi": "2025-01-01"},
+        "okunmus.io": {"fon_tarihi": "2026-08-01", "denendi": "2026-08-01"}},
+        "okunan": {"https://eski.test/x": "2026-06-01"}}}
+    gercek_feeds = funding.FEEDS
+    try:
+        funding.FEEDS = [("https://n.test/feed", "Test", 2)]
+        h_ = fon_haberleri(st_, [], bugun_, lambda u: rss_ if u == "https://n.test/feed" else None)
+    finally:
+        funding.FEEDS = gercek_feeds
+    assert set(h_) == {"obsero.ai", "okunmus.io"}, h_
+    assert set(st_["fon_haberleri"]["adaylar"]) == {"obsero.ai", "denenmis.io", "okunmus.io"}
+    assert list(st_["fon_haberleri"]["okunan"]) == ["https://n.test/a"]      # 60 günden eskisi düşer
     hasat_: dict = {}
     global _get
     gercek_get = _get  # noqa: N806
@@ -2177,6 +2381,23 @@ def _self_test() -> int:
         site_["/careers"] = b'<a href="https://jobs.ashbyhq.com/acme/1">Open roles</a>'
         pano_: list = []
         assert find_verified_email("acme.io", pano_)[0] is None and pano_ == [("ashby", "acme")]
+        # kişi bilgisi: sitedeki kurucu adı ve adres kalıbı; genel kutu yine sitedeki kutudur
+        site_.clear()
+        site_.update({"": b"<p>hello@acme.io</p>",
+                      "/about": b"<p>Ada Lovelace, Co-founder &amp; CEO. Sales: Can Demir "
+                                b"can.demir@acme.io</p>"})
+        kisi_: dict = {}
+        assert find_verified_email("acme.io", None, kisi_)[0] == "hello@acme.io"
+        assert [a[0] for a in kisi_["adaylar"]] == ["Ada Lovelace"], kisi_
+        assert kisi_["kalip"] == ("ad.soyad", "can.demir@acme.io") and kisi_["mx"]
+        # kutu yok ama kalıp var: adres dönmez, kalıp ve MX çağırana bildirilir
+        site_[""] = b"<p>Welcome</p>"
+        kisi_ = {}
+        e_, neden_ = find_verified_email("acme.io", None, kisi_)
+        assert e_ is None and "kalıbı var" in neden_ and kisi_["kalip"] and kisi_["mx"], neden_
+        globals()["mx_ok"] = lambda d: False
+        kisi_ = {}
+        assert "MX" in find_verified_email("acme.io", None, kisi_)[1] and "mx" not in kisi_
     finally:
         _get = gercek_get
         globals()["mx_ok"] = gercek_mx

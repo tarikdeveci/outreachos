@@ -155,9 +155,21 @@ JUDGE_SYSTEM = (
 )
 
 
-def judge(company: dict, site_text: str) -> dict | None:
+# Soğuk mail için ek eleme. İlan yolu (ATS) bunu kullanmaz: büyük şirketin açık ilanına
+# başvurmak anlamlıdır, genel kutusuna soğuk mail atmak değildir.
+JUDGE_SOGUK = (
+    "\nBU KARAR SOĞUK MAİL İÇİN: ek olarak (e) binlerce çalışanı olan yerleşik büyük kuruma "
+    "(banka, holding, telekom, büyük danışmanlık, halka açık teknoloji devi) uygun=false ver: "
+    "orada roller dar tanımlıdır, mail kurucuya ya da ekibe ulaşmaz. Sektör uyumu ARANMAZ: "
+    "küçük ve orta ölçekli, ürün geliştiren, büyüyen şirketler uygundur.\n"
+)
+
+
+def judge(company: dict, site_text: str, soguk: bool = False) -> dict | None:
     # temperature 0: sınırdaki şirket bir run'da geçip ertesi gün elenmesin.
-    return _call(JUDGE_MODEL, JUDGE_SYSTEM,
+    sistem = JUDGE_SYSTEM.replace("Kararsız kaldığında", JUDGE_SOGUK + "Kararsız kaldığında") \
+        if soguk else JUDGE_SYSTEM
+    return _call(JUDGE_MODEL, sistem,
                  f"ŞİRKET: {company['domain']}\nSite metni:\n{site_text[:3000]}",
                  "uygun", max_tokens=400, temperature=0)
 
@@ -186,19 +198,47 @@ DRAFT_SYSTEM = (
     "söz etme. DİL: mailin dili kullanıcı mesajında 'MAİL DİLİ' olarak verilir ve "
     "zorunludur; konu, gövde, hitap ve kapanışın tamamı o dilde olur (yabancı şirkete "
     "Türkçe tek cümle bile yazma). Linkleri düz metin (ornek.com). Klişe, abartılı övgü, "
-    "telefon numarası yok.\n\n"
+    "telefon numarası yok.\n"
+    "AYIRT EDİCİ YAN: Başvuranın en güçlü yanı, profildeki work_experience ve projects "
+    "içinde görülen çok farklı sektörlerde kısa sürede uyum sağlayıp çalışan iş teslim etmesi. "
+    "Şirketin sektöründe deneyimi yoksa bunu deneyim gibi sunma; bunun yerine profilden 2-3 "
+    "farklı alandaki teslim edilmiş işi ADIYLA sayarak uyum hızını kanıtla ve şirketin önündeki "
+    "işe bağla. 'Hızlı öğrenirim' gibi kanıtsız klişe yazma.\n"
+    "HİTAP: Kullanıcı mesajında 'KİŞİ ADAYLARI' varsa, her adayın geçtiği metne bak. Metin, "
+    "adın BU şirketin kurucusu, CEO'su, CTO'su ya da mühendislik/işe alım yöneticisi olan "
+    "gerçek bir kişi olduğunu açıkça gösteriyorsa (yatırımcı, başka şirketin yöneticisi, ürün "
+    "ya da şirket adı DEĞİLSE) en uygununa adıyla hitap et, hitap_adi alanına adı listede "
+    "yazdığı gibi koy, hitap_gecerli=true ver. Emin değilsen isim kullanma, "
+    "hitap_gecerli=false ver. Listede olmayan bir ad ASLA yazma.\n"
+    "YATIRIM: 'YATIRIM HABERİ' verilmişse en fazla bir cümleyle, yalnızca verilen bilgiyle "
+    "(yeni turun ardından büyüyen ekibe katkı) bağlayabilirsin.\n\n"
     "AYRICA (mail dışında, rapor için):\n"
-    "- uygunluk_skoru: 0-100, başvuranın profiliyle şirketin örtüşmesi (85+ çok güçlü, "
-    "60-84 makul, 60 altı zayıf) + tek cümlelik skor_gerekce.\n"
-    "- hedef_kisiler: LinkedIn'de MESAJ atılacak 1-3 ROL ünvanı (ör. 'Head of AI', "
-    "'Engineering Manager', 'Technical Recruiter'). GERÇEK İSİM/E-POSTA UYDURMA, sadece rol.\n"
+    "- uygunluk_skoru: 0-100, bu şirket için başvuranın 'olsa iyi olur' değil 'tam aradığımız "
+    "kişi' sayılma ihtimali. SEKTÖR UYUMU ŞART DEĞİL. Puanı belirleyenler: (1) şirketin aşaması "
+    "ve ekip yapısı: küçük ya da orta ölçekli, yeni yatırım almış, hızlı ürün çıkarması gereken "
+    "ekip yüksek; dar uzmanlık rolleri olan büyük kurum düşük; (2) şirketin ürününde AI ve "
+    "yazılım ürün işinin ağırlığı; (3) başvuranın hangi sektörde olursa olsun teslim ettiği "
+    "işlerden şirketin önündeki işe doğrudan taşınabilecek olanlar. 85+ çok güçlü, 70-84 "
+    "güçlü, 70 altı zayıf. Tek cümlelik skor_gerekce.\n"
+    "- hedef_kisiler: LinkedIn'de MESAJ atılacak 1-3 ROL ünvanı (ör. 'Founder', 'CTO', "
+    "'Engineering Manager'). hitap_gecerli=true ise ilki 'Ad Soyad (unvan)' olur. Başka "
+    "GERÇEK İSİM/E-POSTA UYDURMA, sadece rol.\n"
     "- linkedin_mesaji: LinkedIn için 1-2 cümlelik kısa bağlantı notu (aynı uydurma-yok kuralı).\n"
     "- cv: profilde 'cv_links' varsa, şirketin işine ve aranan role en uygun CV'nin ANAHTARI "
     "(cv_links içindeki anahtarlardan biri, aynen). CV linkini gövdeye yazma, sistem ekler.\n\n"
     'SADECE şu JSON: {"proje": "...", "konu": "...", "govde": "...", "uygunluk_skoru": 0-100, '
     '"skor_gerekce": "...", "hedef_kisiler": ["rol1", "rol2"], "linkedin_mesaji": "...", '
-    '"cv": "..."}'
+    '"cv": "...", "hitap_gecerli": true/false, "hitap_adi": "..."}'
 )
+# Bu skorun altındaki taslak yazılmaz, denetime de gönderilmez: 'olsa iyi olur' maili gitmez.
+MIN_SKOR = int(os.environ.get("MIN_SKOR", "70"))
+
+
+def skor_of(d: dict) -> int | None:
+    try:
+        return int(float(str(d.get("uygunluk_skoru")).strip().rstrip("%")))
+    except ValueError:
+        return None
 
 
 TR_HARF = re.compile(r"[ğĞşŞıİ]")       # Türkçeye özgü; ç/ö/ü Almanca, Fransızcada da var
@@ -239,9 +279,15 @@ def draft(company: dict, site_text: str, profile: dict, sektor: str,
           today: str, duzeltme: str = "", dil: str = "en") -> dict | None:
     user = (f"BUGÜNÜN TARİHİ: {today}\n"
             f"MAİL DİLİ: {DIL_ADI.get(dil, 'İngilizce')}\n\n"
-            f"ŞİRKET: {company['domain']} ({sektor})\nSite metni:\n{site_text[:3000]}\n\n"
-            f"--- BAŞVURAN PROFİLİ (tek gerçek kaynak) ---\n"
-            f"{json.dumps(profile, ensure_ascii=False)}")
+            f"ŞİRKET: {company['domain']} ({sektor})\nSite metni:\n{site_text[:3000]}\n\n")
+    if company.get("haber"):
+        user += f"YATIRIM HABERİ ({company.get('fon_tarihi', '?')}): {company['haber']}\n\n"
+    if company.get("kisiler"):
+        user += "KİŞİ ADAYLARI (ad | kaynak | geçtiği metin):\n" + "".join(
+            f"- {k[0]} | {k[2] if len(k) > 2 else '?'} | {str(k[1])[:240]}\n"
+            for k in company["kisiler"]) + "\n"
+    user += (f"--- BAŞVURAN PROFİLİ (tek gerçek kaynak) ---\n"
+             f"{json.dumps(profile, ensure_ascii=False)}")
     if duzeltme:
         user += (f"\n\n--- ÖNCEKİ DENEMEN REDDEDİLDİ ---\n{duzeltme}\n"
                  "Bu sorunları gidererek yeniden yaz. Şüphelendiğin iddiayı "
@@ -419,7 +465,7 @@ def repair_and_verify(body: str, problems: list, profile: dict, today: str,
 def judge_draft_verify(company: dict, site_text: str, profile: dict,
                        today: str) -> tuple[dict | None, str]:
     """(taslak, sebep) — taslak None ise sebep neden elendiğini söyler."""
-    j = judge(company, site_text)
+    j = judge(company, site_text, soguk=True)
     if not j:
         return None, "eleme adımı cevap vermedi"
     if not j.get("uygun"):
@@ -442,9 +488,16 @@ def judge_draft_verify(company: dict, site_text: str, profile: dict,
                 continue
             return None, dil_hatasi
         d["dil"] = dil
+        # Eşleşme eşiği doğrulamadan önce: zayıf eşleşmeye denetim çağrısı harcanmaz. Skor
+        # yoksa (model alanı atladıysa) taslak geçer; eşik bir kalite süzgeci, güvenlik değil.
+        skor = skor_of(d)
+        if skor is not None and skor < MIN_SKOR:
+            return None, f"düşük eşleşme (%{skor}): {str(d.get('skor_gerekce', ''))[:110]}"
         # Deterministik sayı denetimi önce: ucuz ve kesin. Modelin gördüğü site metnindeki
-        # sayılar şirketin kendi sayısıdır; başvuranın iddialarını verify() profile bağlar.
-        sayi_sorunu = numeric_check(d["govde"], profile, f"{alan} {site_text[:3000]}")
+        # ve yatırım haberindeki sayılar şirketin kendi sayısıdır; başvuranın iddialarını
+        # verify() profile bağlar.
+        sayi_sorunu = numeric_check(d["govde"], profile,
+                                    f"{alan} {site_text[:3000]} {company.get('haber', '')}")
 
         v = verify(d["govde"], profile)
         if v is None:
@@ -576,7 +629,7 @@ if __name__ == "__main__":
     asil = (judge, draft, verify)       # modül düzeyi: atama global adı değiştirir
     istek: list = []
     try:
-        judge = lambda c, s: {"uygun": True, "sektor": "ai"}
+        judge = lambda c, s, **k: {"uygun": True, "sektor": "ai"}
         verify = lambda b, p: {"temiz": True, "sorunlar": []}
         cevaplar = [{"konu": "Başvuru", "govde": tr_mail}, {"konu": "Application", "govde": en_mail}]
         draft = lambda *a: istek.append(a) or cevaplar.pop(0)
@@ -586,6 +639,37 @@ if __name__ == "__main__":
         cevaplar = [{"konu": "Başvuru", "govde": tr_mail}] * 2
         d, sebep = judge_draft_verify({"domain": "axle.io"}, "AI scheduling", {}, "t")
         assert d is None and sebep.startswith("DİL:")
+        # eşleşme eşiği: zayıf skor denetime gitmeden elenir, skorsuz ve güçlü taslak geçer
+        cevaplar = [{"konu": "Application", "govde": en_mail, "uygunluk_skoru": "62",
+                     "skor_gerekce": "büyük kurum"}]
+        d, sebep = judge_draft_verify({"domain": "axle.io"}, "AI scheduling", {}, "t")
+        assert d is None and sebep.startswith("düşük eşleşme (%62)"), sebep
+        for s in (85, "%91", None):
+            cevaplar = [{"konu": "Application", "govde": en_mail, "uygunluk_skoru": s}]
+            assert judge_draft_verify({"domain": "axle.io"}, "AI scheduling", {}, "t")[0]
+        # kişi adayı ve yatırım haberi modele gider; haberdeki sayı uydurma sayılmaz
+        haberli = en_mail.replace("Best,", "Congrats on the $14M round.\n\nBest,")
+        istek.clear()
+        cevaplar = [{"konu": "Application", "govde": haberli, "uygunluk_skoru": 80}]
+        d, sebep = judge_draft_verify(
+            {"domain": "axle.io", "haber": "Axle raises $14M", "fon_tarihi": "2026-10-01",
+             "kisiler": [("Ada Lovelace", "co-founder and CEO Ada Lovelace", "yatırım haberi")]},
+            "AI scheduling", {}, "t")
+        assert d and sebep == "", sebep
     finally:
         judge, draft, verify = asil
+    # gerçek draft(): kişi adayları ve haber kullanıcı mesajına girer, eleme soğuk kipte sıkılaşır
+    giden: list = []
+    asil_call = _call
+    try:
+        _call = lambda m, s, u, k, **kw: giden.append((s, u)) or {"govde": "x"}   # noqa: E731
+        draft({"domain": "axle.io", "haber": "Axle raises $14M", "fon_tarihi": "2026-10-01",
+               "kisiler": [("Ada Lovelace", "co-founder and CEO Ada Lovelace", "yatırım haberi")]},
+              "AI", {}, "ai", "t")
+        judge({"domain": "a.io"}, "x", soguk=True), judge({"domain": "a.io"}, "x")
+    finally:
+        _call = asil_call
+    assert "YATIRIM HABERİ (2026-10-01): Axle raises $14M" in giden[0][1]
+    assert "- Ada Lovelace | yatırım haberi | co-founder and CEO Ada Lovelace" in giden[0][1]
+    assert "SOĞUK MAİL" in giden[1][0] and "SOĞUK MAİL" not in giden[2][0]
     print("drafting self-test: OK")

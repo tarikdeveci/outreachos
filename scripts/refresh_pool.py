@@ -47,6 +47,24 @@ def _ulke(loc: str) -> str:
     return loc.split(";")[0].split(",")[-1].strip() or "??"
 
 
+# YC dönemi yatırım tarihidir: YC her şirkete dönem başında yatırım yapar.
+_DONEM_AY = {"winter": 1, "spring": 4, "summer": 7, "fall": 10}
+
+
+def donem_tarihi(batch: str) -> str | None:
+    """'Summer 2026' → '2026-07-01'. Tanınmayan biçim None."""
+    m = re.match(r"(?i)\s*(winter|spring|summer|fall)\s+(\d{4})", batch or "")
+    return f"{m.group(2)}-{_DONEM_AY[m.group(1).lower()]:02d}-01" if m else None
+
+
+def yc_alanlari(c: dict) -> dict:
+    """Sıralamanın kullandığı alanlar: ekip, işe alım, yatırım tarihi, remote."""
+    bolge = c.get("regions") or []
+    return {"ekip": c.get("team_size"), "ise_aliyor": bool(c.get("isHiring")),
+            "fon_tarihi": donem_tarihi(c.get("batch", "")),
+            "remote": "Remote" in bolge or "Partly Remote" in bolge}
+
+
 def yc_havuzu(pool: dict) -> int:
     """YC'nin açık şirket verisinden aday ekler.
 
@@ -72,7 +90,7 @@ def yc_havuzu(pool: dict) -> int:
         if dom in pool:
             # Ekip büyüklüğü ve işe alım durumu zamanla değişir; eski kayıt tazelenir.
             if str(pool[dom].get("kaynak", "")).startswith("YC"):
-                pool[dom].update(ekip=c.get("team_size"), ise_aliyor=bool(c.get("isHiring")))
+                pool[dom].update(yc_alanlari(c))
             continue
         pool[dom] = {
             "domain": dom,
@@ -80,8 +98,7 @@ def yc_havuzu(pool: dict) -> int:
             "ulke": _ulke(c.get("all_locations", "")),
             "sehir": (c.get("all_locations") or "").split(",")[0].strip(),
             "sektor": c.get("industry", ""),
-            "ekip": c.get("team_size"),
-            "ise_aliyor": bool(c.get("isHiring")),
+            **yc_alanlari(c),
             "aciklama": (c.get("one_liner") or "")[:200],
             "eklendi": date.today().isoformat(),
         }
@@ -207,5 +224,16 @@ def main() -> int:
     return 0
 
 
+def _self_test() -> int:
+    assert donem_tarihi("Summer 2026") == "2026-07-01" and donem_tarihi("Winter 2012") == "2012-01-01"
+    assert donem_tarihi("Fall 2025") == "2025-10-01" and donem_tarihi("") is None
+    a = yc_alanlari({"team_size": 12, "isHiring": True, "batch": "Spring 2026",
+                     "regions": ["United Kingdom", "Remote"]})
+    assert a == {"ekip": 12, "ise_aliyor": True, "fon_tarihi": "2026-04-01", "remote": True}, a
+    assert yc_alanlari({"regions": ["America / Canada"]})["remote"] is False
+    print("refresh_pool self-test: OK")
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_self_test() if "--self-test" in sys.argv else main())
